@@ -121,10 +121,10 @@ vec3 inkRamp(float u) {
   vec3 lch = mix(LCH_CORAL, LCH_MAGENTA, smoothstep(0.08, 0.28, u));
   lch = mix(lch, LCH_VIOLET, smoothstep(0.26, 0.45, u));
   vec3 c = oklchToSrgb(lch);
-  // Scaling toward black keeps the sRGB chromaticity exactly, so the tail of
+  // Scaling toward BLACK keeps the sRGB chromaticity exactly, so the tail of
   // the gradient stays violet instead of going grey. pow() holds the hue a
-  // little longer on the way down. u == 1 is exactly black.
-  return c * (1.0 - pow(smoothstep(0.50, 1.0, u), 1.3));
+  // little longer on the way down. u == 1 is exactly BLACK (the page bg).
+  return mix(BLACK, c, 1.0 - pow(smoothstep(0.50, 1.0, u), 1.3));
 }
 
 // ── blob table ──────────────────────────────────────────────────────────
@@ -301,32 +301,47 @@ void main() {
   float uInk = uBlob + 0.78 * thin * thin + 0.075 * cov * warp.y / warpAmp;
   uInk = clamp(uInk, 0.0, 1.0);
 
-  // Resting gradient. The drift is the whole idle motion budget: < 0.03 uv
+  // Ambient. Every term below that is gated on amb exists only once the
+  // settle is over: u_idle is exactly 0 through the barrage and the settle, so
+  // amb is exactly 0 there and every idle term adds a literal 0.0. It then eases
+  // in over 2.5 s with zero slope at u_idle == 0, so the last settle frame and
+  // the first idle frame are the same frame — the life arrives without a seam.
+  float amb = smoothstep(0.0, 2.5, u_idle);
+
+  // Resting gradient. The drift is the bulk of the idle motion budget: < 0.03 uv
   // across any 10 s, and every term is continuous in t.
   float breathe =
       0.0090 * sin(uv.y * 2.30 - t * 0.15)
     + 0.0050 * sin(uv.y * 4.10 + t * 0.10 + 1.7)
     + 0.0060 * fbm(vec2(uv.y * 1.60, t * 0.05));
   // Biased strictly positive so the panel only ever breathes *left*: the black
-  // point sits at (u_panel - drift), which therefore never slides past 40% of
-  // the width. Range ≈ 0.001 … 0.014 uv, i.e. the black point lives in 494–511 px
-  // at 1280 wide.
+  // point sits at (u_panel - drift), which therefore never slides past u_panel
+  // of the width. Range ≈ 0.001 … 0.014 uv, i.e. the black point lives within
+  // ~18 px left of the panel edge at 1280 wide (558–575 px at u_panel = 0.45).
   float drift = max(0.0075 + 0.40 * breathe, 0.0);
-  float uTarget = clamp((uv.x + drift) / u_panel, 0.0, 1.0);
+  float uTarget = (uv.x + drift) / u_panel;
+  // Idle: the colour boundary undulates down the panel on a ~35 s period. 0.004
+  // of ramp is 0.0018 uv — under 2.5 px at 1280 — which on top of the drift's
+  // own 0.013 uv keeps the black point inside a 10 px band. Anything larger and
+  // the edge visibly swims; the travelling band below is what carries the life.
+  uTarget += amb * 0.004 * sin(uv.y * 2.4 + u_idle * 0.18 + 1.3);
+  uTarget = clamp(uTarget, 0.0, 1.0);
 
-  // The panel resolves before the open field does (16% head start at x = 0),
-  // and the cross-fade starts far earlier than the ink finishes pooling, so
-  // the morph is a drain rather than a cut. At s == 1 the argument is ≥ 1
-  // everywhere, so fade is exactly 1 and the settled gradient is exact.
-  // Window widened (0.18→1.00 becomes 0.15→0.95): the old one crammed the
-  // whole morph into the tail of the settle ease, which is what made
-  // t1800 → t2300 read as a cut. At s == 1 the argument is still ≥ 1, so the
-  // settled gradient is untouched.
-  float fade = smoothstep(0.15, 0.95, s * (1.0 + 0.16 * (1.0 - uv.x)));
+  // The panel resolves before the open field does, and the cross-fade starts
+  // far earlier than the ink finishes pooling, so the morph is a drain rather
+  // than a cut. The head start is shaped s·(1-s) so it is gone by s == 1: the
+  // left edge still runs ~8 points ahead through the middle of the settle, and
+  // yet every column reaches fade == 1 at the same instant. Together with a
+  // smoothstep that ends at 1.0 rather than 0.95, no settle-driven term
+  // saturates before s ≈ 0.97 and all of them arrive with zero slope — which is
+  // what stops the last moment of the settle reading as a landing.
+  float sLead = s + 0.34 * (1.0 - uv.x) * s * (1.0 - s);
+  float fade = smoothstep(0.15, 1.0, sLead);
 
   // Black crops back in from the right while the ink pools, mirroring the
-  // wavefront that opened the barrage.
-  float cropX = mix(1.42, u_panel + 0.02, smoothstep(0.04, 0.70, s));
+  // wavefront that opened the barrage. The ramp ends at s == 1 for the same
+  // reason the cross-fade does: it used to finish at s == 0.70, i.e. mid-flight.
+  float cropX = mix(1.42, u_panel + 0.02, smoothstep(0.04, 1.0, s));
   float crop = 1.0 - smoothstep(cropX - 0.13, cropX + 0.13, wx);
 
   float uu = mix(uInk, uTarget, fade);
@@ -339,7 +354,7 @@ void main() {
   vec3 deep = inkRamp(clamp(uHalo + 0.34, 0.0, 1.0));
   float trough = (0.075 + 0.300 * glow) * born * (1.0 - fade) * crop;
 
-  vec3 col = ink * cc + deep * trough * (1.0 - cc);
+  vec3 col = BLACK * (1.0 - cc) + ink * cc + deep * trough * (1.0 - cc);
   // Abyss floor, in two depths. Inside the entered region it is a 5.6% violet
   // so a gap between waves reads as a trough rather than as a hole punched
   // through to #000; ahead of the front it drops to 2.0%, which is black to
@@ -353,6 +368,16 @@ void main() {
   // on screen, which survives, and gives the flats a printed-ink tooth.
   float mottle = valueNoise(q * 17.0 + vec2(t * 0.05, -t * 0.04)) - 0.5;
   col *= 1.0 + 0.085 * mottle * (1.0 - fade);
+
+  // Idle: one very slow band of light travelling out along the panel, ~30 s per
+  // pass. It scales the colour *above* BLACK, never the frame — so it can only
+  // ever dim what is already lit and can never lift the dark side above the page
+  // background, and the 3.5% it moves is felt rather than seen. It is windowed
+  // off the first tenth of the panel because that is the coral anchor: #FF7B7B
+  // is a brand endpoint and has to measure the same at t = 3 s and t = 25 s.
+  float band = smoothstep(0.0, 0.10, uv.x)
+             * amb * 0.035 * sin((uv.x / u_panel) * 6.2832 - u_idle * 0.21 + uv.y * 0.8);
+  col += max(col - BLACK, vec3(0.0)) * band;
 
   float dither = (hash21(gl_FragCoord.xy + u_time) - 0.5) * (2.0 / 255.0);
   fragColor = vec4(col + dither, 1.0);

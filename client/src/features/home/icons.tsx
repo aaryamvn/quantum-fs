@@ -1,15 +1,17 @@
-import { Lock, Plus, Server } from "lucide-react";
+import { Plus, Server, Shield } from "lucide-react";
 import type { ComponentType } from "react";
 
-/** Every glyph in the list is drawn on the same 18px box at 1.5 stroke. */
-export const ICON_BOX = 18;
-export const ICON_STROKE = 1.5;
+/** List glyphs are drawn at 16px / 1.75 stroke; the bottom-right link at 14px. */
+export const ICON_SIZE = 16;
+export const ICON_STROKE = 1.75;
+/** Fixed column the vault glyph sits in, so every label starts on one line. */
+export const ICON_COL = 20;
 
 /**
- * `--cut` is an unregistered custom property, so it snaps the instant the row
- * is hovered. Transitioning the badge's own background-color and box-shadow —
- * real animatable properties whose computed values re-resolve when the var
- * changes — puts the cut-out back in step with the row's 160ms colour fade.
+ * `--cut` is an unregistered custom property, so it snaps the instant a row is
+ * hovered. Transitioning the badge's own background-color and box-shadow —
+ * real animatable properties, whose computed values re-resolve when the var
+ * changes — keeps the cut-out in step with the row's 160ms colour fade.
  */
 const CUT_MS = 160;
 const CUT_EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
@@ -20,57 +22,60 @@ type LucideLike = ComponentType<{
   "aria-hidden"?: boolean;
 }>;
 
-export function ServerGlyph() {
-  return <Server size={ICON_BOX} strokeWidth={ICON_STROKE} aria-hidden />;
+export function ServerGlyph({ size = ICON_SIZE }: { size?: number }) {
+  return <Server size={size} strokeWidth={ICON_STROKE} aria-hidden />;
+}
+
+/** A vault reads as a shield: it is a guarded space, not a container. */
+export function VaultGlyph({ size = ICON_SIZE }: { size?: number }) {
+  return <Shield size={size} strokeWidth={ICON_STROKE} aria-hidden />;
 }
 
 /**
- * Vault glyph. lucide's own `Vault` collapses into a boxed X at 18px and reads
- * as "cancel", so the mark for a vault is `Lock` — legible at this size and
- * unambiguous next to the plus badge on "Join a Vault".
+ * Base glyph with a plus badge at its bottom-right. The badge sits on a disc
+ * painted with whatever surface is behind it (`--cut`, set by the row or the
+ * button) and carries a ring of the same colour, so it punches a clean hole out
+ * of the base glyph instead of colliding with its strokes.
  */
-export function VaultGlyph() {
-  return <Lock size={ICON_BOX} strokeWidth={ICON_STROKE} aria-hidden />;
-}
+function WithPlusBadge({ Base, size }: { Base: LucideLike; size: number }) {
+  // The knockout is a circle of radius disc/2 + ring centred on the badge. Any
+  // larger and it reaches the middle of the base glyph — on a shield that means
+  // eating the point, which is the whole silhouette — so it is kept small and
+  // pushed a quarter of the box outside, where it only bites the corner.
+  const disc = Math.round(size * 0.58);
+  const plus = disc - 1;
+  const out = -Math.round(size * 0.3);
 
-/**
- * Base glyph with a small plus badge at the bottom-right. The badge sits on a
- * disc painted with the row's own background (`--cut`, set by the row) and
- * carries a ring of the same colour, so it punches a clean hole out of the base
- * glyph instead of colliding with its strokes.
- *
- * The badge overhangs the 18px box by 4px on both axes: any less and the cut
- * circle reaches the middle of the glyph and bisects it (the server's lower bar
- * disappears) instead of taking a bite out of its corner.
- */
-function WithPlusBadge({ Base }: { Base: LucideLike }) {
   return (
-    <span className="relative block" style={{ width: ICON_BOX, height: ICON_BOX }}>
-      <Base size={ICON_BOX} strokeWidth={ICON_STROKE} aria-hidden />
+    <span
+      className="relative block shrink-0"
+      style={{ width: size, height: size, lineHeight: 0 }}
+    >
+      <Base size={size} strokeWidth={ICON_STROKE} aria-hidden />
       <span
         className="absolute grid place-items-center rounded-full"
         style={{
-          width: 10,
-          height: 10,
-          right: -4,
-          bottom: -4,
+          width: disc,
+          height: disc,
+          right: out,
+          bottom: out,
           backgroundColor: "var(--cut, var(--color-surface))",
           boxShadow: "0 0 0 1.5px var(--cut, var(--color-surface))",
           transition: `background-color ${CUT_MS}ms ${CUT_EASE}, box-shadow ${CUT_MS}ms ${CUT_EASE}`,
         }}
       >
-        <Plus size={10} strokeWidth={2} aria-hidden />
+        <Plus size={plus} strokeWidth={2.5} aria-hidden />
       </span>
     </span>
   );
 }
 
-export function ServerPlusGlyph() {
-  return <WithPlusBadge Base={Server} />;
+export function ServerPlusGlyph({ size = 14 }: { size?: number }) {
+  return <WithPlusBadge Base={Server} size={size} />;
 }
 
-export function VaultPlusGlyph() {
-  return <WithPlusBadge Base={Lock} />;
+export function VaultPlusGlyph({ size = ICON_SIZE }: { size?: number }) {
+  return <WithPlusBadge Base={Shield} size={size} />;
 }
 
-export { Plus };
+export { Plus, Server, Shield };

@@ -9,7 +9,7 @@ type IconmarkProps = {
 };
 
 /**
- * QuantamFS iconmark: three blurred lobes (coral, violet, black) forming the
+ * QuantumFS iconmark: three blurred lobes (coral, violet, black) forming the
  * mark. The Gaussian blur filter is part of the artwork, so it is kept inline
  * and given a per-instance id to avoid collisions between multiple instances.
  */

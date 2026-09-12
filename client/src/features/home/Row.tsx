@@ -1,146 +1,144 @@
-import { motion, useReducedMotion } from "motion/react";
-import type { Variants } from "motion/react";
 import type { CSSProperties, ReactNode } from "react";
 
-import { ICON_BOX, Plus } from "./icons";
+import { formatBytes } from "@/lib/format";
+import type { Vault } from "@/lib/backend";
 
-export type RowKind = "server" | "vault" | "add-server" | "join-vault";
-
-/** Row geometry, in px. Kept here so the vault thread can line up to the pixel. */
-export const PAD_X = 16;
-/**
- * Vault rows step right to clear the thread: 32 = THREAD_X (25) + 7px air.
- * 36 left a dead dark band between the group edge and the first vault glyph.
- */
-export const VAULT_PAD_L = 32;
-/** Thread x, on the centre of the server row's icon column (16 + 18/2). */
-export const THREAD_X = 25;
-export const SERVER_H = 50;
-export const VAULT_H = 46;
-export const STANDALONE_H = 50;
-/** Inner radius of a 14px group with a 1px border. */
-export const INNER_R = 13;
-
-const TONE: Record<RowKind, string> = {
-  server: "font-medium text-fg",
-  vault: "font-normal text-fg-2 group-hover/line:text-fg",
-  "add-server": "font-medium text-fg",
-  "join-vault": "font-medium text-fg",
-};
+import { ICON_COL, ICON_SIZE, ICON_STROKE, Plus, Server, Shield, VaultPlusGlyph } from "./icons";
 
 const EASE = "ease-[cubic-bezier(0.2,0.8,0.2,1)]";
 
-export interface RowProps {
-  kind: RowKind;
-  label: string;
-  glyph: ReactNode;
-  height: number;
-  /** Left padding of the label column; vault rows step right. */
-  padLeft?: number;
-  /** Reserve room for the trailing plus button. */
-  padRight?: number;
-  /** Corner rounding, applied to the painted surface only. */
-  radius?: string;
-  /** Row surface at rest; server rows sit a shade brighter than their vaults. */
-  surface?: string;
-  /** Row surface on hover; kept one perceptual step above `surface`. */
-  surfaceHover?: string;
-  /** Faint top-edge light, used to read the server row as the group's capstone. */
-  topLight?: boolean;
-  /** Hairline above this row, drawn on the wrapper so it spans edge to edge. */
-  divider?: "none" | "line" | "strong";
-  /** Trailing "add vault" affordance; a sibling of the row button, never a child. */
-  plusLabel?: string;
-  /** Entrance variant; the row is a variant child of the screen container. */
-  variants?: Variants;
-  className?: string;
-  style?: CSSProperties;
-}
-
-const DIVIDER: Record<"none" | "line" | "strong", string> = {
-  none: "",
-  line: "border-t border-line",
-  strong: "border-t border-line-strong",
-};
-
 /**
- * One line of the list: the row button plus, optionally, a sibling plus button.
- * The wrapper owns the hover group so that pointing at either half lights the
- * whole line.
+ * Rows live inside a card, whose `overflow: hidden` would clip a ring drawn
+ * outside them; the offset is pulled in so focus stays visible on the top row.
  */
-export function Row({
-  kind,
-  label,
-  glyph,
-  height,
-  padLeft = PAD_X,
-  padRight = PAD_X,
-  radius,
-  surface = "var(--color-surface)",
-  surfaceHover = "var(--color-surface-hover)",
-  topLight = false,
-  divider = "none",
-  plusLabel,
-  variants,
+const RING = "focus-visible:[outline-offset:-2px]";
+
+const ROW =
+  `flex w-full gap-[10px] px-[14px] py-[12px] text-left ` +
+  `bg-surface hover:bg-surface-hover active:bg-surface-active ` +
+  `[--cut:var(--color-surface)] hover:[--cut:var(--color-surface-hover)] active:[--cut:var(--color-surface-active)] ` +
+  `transition-colors duration-[160ms] ${EASE} ${RING}`;
+
+/** The card: a bordered slab that the rows sit inside, hairlines between them. */
+export function Card({
   className = "",
   style,
-}: RowProps) {
-  const reduced = useReducedMotion() ?? false;
-
+  children,
+}: {
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
   return (
-    <motion.div
-      variants={variants}
-      className={`group/line relative ${DIVIDER[divider]} ${className}`}
+    <div
+      className={`overflow-hidden rounded-[12px] border border-line bg-surface ${className}`}
       style={style}
     >
-      <motion.button
-        type="button"
-        data-row={kind}
-        whileTap={reduced ? undefined : { scale: 0.99 }}
-        style={{
-          height,
-          paddingLeft: padLeft,
-          paddingRight: padRight,
-          borderRadius: radius,
-          boxShadow: topLight ? "inset 0 1px 0 rgba(255,255,255,0.055)" : undefined,
-          ["--row-surface" as string]: surface,
-          ["--row-surface-hover" as string]: surfaceHover,
-          ["--cut" as string]: surface,
-        }}
-        className={`flex w-full items-center text-left text-[15px] leading-none tracking-[-0.005em]
-          bg-[var(--row-surface)] group-hover/line:bg-[var(--row-surface-hover)]
-          group-hover/line:[--cut:var(--row-surface-hover)]
-          transition-colors duration-[160ms] ${EASE} ${TONE[kind]}`}
-      >
-        <span
-          className={`flex shrink-0 items-center justify-center text-fg-2 group-hover/line:text-fg transition-colors duration-[160ms] ${EASE}`}
-          style={{ width: ICON_BOX, height: ICON_BOX }}
-        >
-          {glyph}
-        </span>
-        <span className="ml-[12px] min-w-0 truncate">{label}</span>
-      </motion.button>
+      {children}
+    </div>
+  );
+}
 
-      {/*
-        The plus is in the mock as a persistent part of the row, so it rests
-        visible rather than appearing only on hover. Three steps, all colour:
-        0.58 x fg-2 at rest, full fg-2 when the line is hovered or focused,
-        fg plus a disc when the plus itself is the target.
-      */}
-      {plusLabel ? (
-        <button
-          type="button"
-          data-plus=""
-          aria-label={plusLabel}
-          className={`absolute top-1/2 right-[11px] grid h-[28px] w-[28px] -translate-y-1/2 place-items-center
-            rounded-full text-fg-2 opacity-[0.58]
-            transition-[opacity,color,background-color,scale] duration-[160ms] ${EASE}
-            group-hover/line:opacity-100 hover:bg-white/[0.07] hover:text-fg
-            focus-visible:opacity-100 ${reduced ? "" : "active:scale-[0.9]"}`}
-        >
-          <Plus size={16} strokeWidth={1.75} aria-hidden />
-        </button>
-      ) : null}
-    </motion.div>
+/**
+ * A server is a heading, not a row: it names the group of vaults beneath it and
+ * carries their address, so the card below can be pure content.
+ */
+export function ServerHeading({
+  name,
+  address,
+  onAdd,
+}: {
+  name: string;
+  address: string;
+  onAdd(): void;
+}) {
+  return (
+    <div className="mb-[10px] flex h-[28px] items-center">
+      <Server
+        size={ICON_SIZE}
+        strokeWidth={ICON_STROKE}
+        className="shrink-0 text-fg-2"
+        aria-hidden
+      />
+      <span className="ml-[8px] truncate text-[15px] leading-none font-medium tracking-[-0.005em] text-fg">
+        {name}
+      </span>
+      <span className="ml-[10px] truncate text-[13px] leading-none font-normal text-fg-3 tabular-nums">
+        {address}
+      </span>
+      <span className="flex-1" />
+      <button
+        type="button"
+        data-plus=""
+        onClick={onAdd}
+        aria-label={`Add vault to ${name}`}
+        className={`-mr-[3px] grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full
+          text-fg-3 transition-colors duration-[160ms] ${EASE}
+          hover:bg-surface-hover hover:text-fg focus-visible:text-fg`}
+      >
+        <Plus size={15} strokeWidth={ICON_STROKE} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+/** One vault: name on top, membership and footprint underneath. */
+export function VaultRow({ vault, first }: { vault: Vault; first: boolean }) {
+  const members = `${vault.memberCount} member${vault.memberCount === 1 ? "" : "s"}`;
+
+  return (
+    <button
+      type="button"
+      data-row="vault"
+      className={`${ROW} min-h-[58px] items-start ${first ? "" : "border-t border-line"}`}
+    >
+      <span
+        className="flex shrink-0 items-center justify-center text-fg-2"
+        style={{ width: ICON_COL, height: 20 }}
+      >
+        <Shield size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden />
+      </span>
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-[15px] leading-[20px] font-medium tracking-[-0.005em] text-fg">
+          {vault.name}
+        </span>
+        <span className="truncate text-[12.5px] leading-[16px] text-fg-3 tabular-nums">
+          {members}
+          <span className="mx-[6px]">·</span>
+          {formatBytes(vault.usedBytes)}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/** A server with nothing in it yet — the card stays, so the group keeps its shape. */
+export function EmptyVaultRow() {
+  return (
+    <div className="flex min-h-[48px] items-center px-[14px] py-[12px] text-[13px] leading-[18px] text-fg-3">
+      No vaults yet
+    </div>
+  );
+}
+
+/** The one action that lives in the list: joining a vault you were invited to. */
+export function JoinVaultRow({ onClick }: { onClick(): void }) {
+  return (
+    <button
+      type="button"
+      data-row="join-vault"
+      onClick={onClick}
+      className={`${ROW} min-h-[48px] items-center`}
+    >
+      <span
+        className="flex shrink-0 items-center justify-center text-fg-2"
+        style={{ width: ICON_COL, height: 20 }}
+      >
+        <VaultPlusGlyph />
+      </span>
+      <span className="text-[15px] leading-[20px] font-medium tracking-[-0.005em] text-fg">
+        Join a Vault
+      </span>
+    </button>
   );
 }

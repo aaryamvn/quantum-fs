@@ -14,6 +14,8 @@ export interface ColorFieldProps {
   progress: MotionValue<number>;
   settle: MotionValue<number>;
   time: MotionValue<number>;
+  /** Seconds since the settle finished; 0 until then. Drives the ambient drift. */
+  idle: MotionValue<number>;
   shader: FieldShader;
   /** Final panel width as a fraction of the viewport width. */
   panel?: number;
@@ -49,7 +51,7 @@ const CONTEXT_ATTRS: WebGLContextAttributes = {
 };
 
 /** Static fallback used when WebGL2 is unavailable. */
-const FALLBACK_GRADIENT = "linear-gradient(90deg, #FF7B7B 0%, #4E0EFF 18%, #000 40%)";
+const FALLBACK_GRADIENT = "linear-gradient(90deg, #FF7B7B 0%, #4E0EFF 18%, #010513 45%)";
 
 let warnedNoWebGL2 = false;
 
@@ -102,8 +104,9 @@ export function ColorField({
   progress,
   settle,
   time,
+  idle,
   shader,
-  panel = 0.4,
+  panel = 0.45,
   scale = 0.25,
   blur = 22,
 }: ColorFieldProps) {
@@ -111,8 +114,8 @@ export function ColorField({
   const [supported, setSupported] = useState(true);
 
   // Latest per-frame inputs, read inside the RAF loop without re-running the effect.
-  const liveRef = useRef({ progress, settle, time, panel });
-  liveRef.current = { progress, settle, time, panel };
+  const liveRef = useRef({ progress, settle, time, idle, panel });
+  liveRef.current = { progress, settle, time, idle, panel };
 
   const disposedRef = useRef(false);
 
@@ -146,6 +149,7 @@ export function ColorField({
     let uTime: WebGLUniformLocation | null = null;
     let uProgress: WebGLUniformLocation | null = null;
     let uSettle: WebGLUniformLocation | null = null;
+    let uIdle: WebGLUniformLocation | null = null;
     let uPanel: WebGLUniformLocation | null = null;
     let uCanvasCss: WebGLUniformLocation | null = null;
     let uBleed: WebGLUniformLocation | null = null;
@@ -190,6 +194,7 @@ export function ColorField({
       uTime = gl.getUniformLocation(program, "u_time");
       uProgress = gl.getUniformLocation(program, "u_progress");
       uSettle = gl.getUniformLocation(program, "u_settle");
+      uIdle = gl.getUniformLocation(program, "u_idle");
       uPanel = gl.getUniformLocation(program, "u_panel");
       uCanvasCss = gl.getUniformLocation(program, "u_canvasCss");
       uBleed = gl.getUniformLocation(program, "u_bleed");
@@ -218,6 +223,7 @@ export function ColorField({
       gl.uniform1f(uTime, live.time.get());
       gl.uniform1f(uProgress, live.progress.get());
       gl.uniform1f(uSettle, live.settle.get());
+      gl.uniform1f(uIdle, live.idle.get());
       gl.uniform1f(uPanel, live.panel);
 
       gl.drawArrays(gl.TRIANGLES, 0, 3);

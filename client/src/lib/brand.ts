@@ -1,1 +1,1 @@
-export const APP_NAME = "QuantamFS";
+export const APP_NAME = "QuantumFS";

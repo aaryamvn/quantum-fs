@@ -4,10 +4,10 @@ import { listen } from "@tauri-apps/api/event";
 import type { BackendClient } from "./client";
 import type {
   BackendEvent,
+  CreateVaultInput,
   DaemonStatus,
   JoinCode,
   OrchestrationServer,
-  ServerId,
   Vault,
 } from "./types";
 
@@ -32,8 +32,8 @@ export function createTauriBackend(): BackendClient {
       return invoke<OrchestrationServer>("add_server", { input });
     },
 
-    createVault(serverId: ServerId, name: string) {
-      return invoke<Vault>("create_vault", { serverId, name });
+    createVault(input: CreateVaultInput) {
+      return invoke<Vault>("create_vault", { input });
     },
 
     joinVault(code: JoinCode) {

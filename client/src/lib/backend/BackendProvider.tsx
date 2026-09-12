@@ -11,7 +11,13 @@ import {
 
 import type { BackendClient } from "./client";
 import { createBackend } from "./index";
-import type { DaemonStatus, JoinCode, OrchestrationServer, ServerId, Vault } from "./types";
+import type {
+  CreateVaultInput,
+  DaemonStatus,
+  JoinCode,
+  OrchestrationServer,
+  Vault,
+} from "./types";
 
 export interface BackendContextValue {
   client: BackendClient;
@@ -21,7 +27,7 @@ export interface BackendContextValue {
   error: string | null;
   refresh(): Promise<void>;
   addServer(input: { name: string; address: string }): Promise<OrchestrationServer>;
-  createVault(serverId: ServerId, name: string): Promise<Vault>;
+  createVault(input: CreateVaultInput): Promise<Vault>;
   joinVault(code: JoinCode): Promise<Vault>;
 }
 
@@ -80,8 +86,8 @@ export function BackendProvider({ children }: { children: ReactNode }) {
   );
 
   const createVault = useCallback(
-    async (serverId: ServerId, name: string) => {
-      const vault = await client.createVault(serverId, name);
+    async (input: CreateVaultInput) => {
+      const vault = await client.createVault(input);
       await refresh();
       return vault;
     },

@@ -23,6 +23,10 @@ export interface Vault {
   serverId: ServerId;
   name: string;
   memberCount: number;
+  /** Bytes used by the vault's files. Always <= `quotaBytes`. */
+  usedBytes: number;
+  /** Bytes of the server's capacity allocated to this vault. */
+  quotaBytes: number;
   role: "owner" | "member";
 }
 
@@ -32,7 +36,16 @@ export interface OrchestrationServer {
   address: string;
   peerId: PeerId;
   online: boolean;
+  /** Total provisionable storage on the server; the sum of vault quotas cannot exceed it. */
+  capacityBytes: number;
   vaults: Vault[];
+}
+
+/** Arguments for creating a vault: a name plus the slice of server capacity it gets. */
+export interface CreateVaultInput {
+  serverId: ServerId;
+  name: string;
+  quotaBytes: number;
 }
 
 export interface DaemonStatus {

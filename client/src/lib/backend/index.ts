@@ -15,6 +15,7 @@ export function createBackend(): BackendClient {
 export type { BackendClient } from "./client";
 export type {
   BackendEvent,
+  CreateVaultInput,
   DaemonStatus,
   JoinCode,
   OrchestrationServer,

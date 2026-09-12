@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "QuantamFS",
+  "productName": "QuantumFS",
   "version": "0.1.0",
-  "identifier": "fs.quantam.app",
+  "identifier": "fs.quantum.app",
   "build": {
     "beforeDevCommand": "node scripts/dev.mjs",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "QuantamFS",
+        "title": "QuantumFS",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -22,7 +22,7 @@
         "resizable": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#000000"
+        "backgroundColor": "#010513"
       }
     ],
     "security": {

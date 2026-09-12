@@ -8,7 +8,7 @@ Run:
 - `npm install`
 - `npm run dev` — browser at http://localhost:1420 (mock backend). Dev params: `?at=<ms>` freezes the splash timeline, `?splash=skip` starts settled.
 - `npm run app` — opens the desktop app with live reload (quit with ⌘Q in the app, or Ctrl-C in the terminal). Works even if `npm run dev` is already running.
-- `npm run app:build` — builds a double-clickable app at `src-tauri/target/release/bundle/macos/QuantamFS.app` (open it from Finder or Spotlight; ⌘Q quits).
+- `npm run app:build` — builds a double-clickable app at `src-tauri/target/release/bundle/macos/QuantumFS.app` (open it from Finder or Spotlight; ⌘Q quits).
 
 Test:
 - `npm run typecheck`
@@ -23,4 +23,4 @@ Layout:
 - `src/lib/`        `backend/` (mock + Tauri clients), `devQuery.ts`, `brand.ts`
 - `src-tauri/`      Rust shell + `bridge.rs` mock commands
 - `scripts/`        `dev.mjs`, `shoot.mjs`
-- `public/fonts/`   Urbanist (self-hosted, OFL)
+- fonts             GT Walsheim Trial, loaded from the OS via `local()` (trial licence — no font files in the repo)

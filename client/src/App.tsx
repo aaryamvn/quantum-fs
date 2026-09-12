@@ -17,7 +17,13 @@ export default function App() {
         className="relative h-full w-full bg-bg"
         onPointerDown={tl.phase !== "settled" ? tl.skip : undefined}
       >
-        <ColorField progress={tl.progress} settle={tl.settle} time={tl.time} shader={shader} />
+        <ColorField
+          progress={tl.progress}
+          settle={tl.settle}
+          time={tl.time}
+          idle={tl.idle}
+          shader={shader}
+        />
         <GrainOverlay frozen={tl.frozen} />
         <DragRegion />
         <HomeScreen revealed={tl.phase === "settled"} />

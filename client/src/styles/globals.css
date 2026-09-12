@@ -1,23 +1,67 @@
 @import "tailwindcss";
 
+/* GT Walsheim Trial — loaded from the OS; trial licence, so no files in the repo. */
 @font-face {
-  font-family: "Urbanist";
-  src: url("/fonts/Urbanist-Variable.ttf") format("truetype");
-  font-weight: 100 900;
+  font-family: "GT Walsheim Trial";
+  src: local("GT Walsheim Trial Lt"), local("GTWalsheimTrial-Lt");
+  font-weight: 300;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "GT Walsheim Trial";
+  src: local("GT Walsheim Trial Rg"), local("GTWalsheimTrial-Rg");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "GT Walsheim Trial";
+  src: local("GT Walsheim Trial Md"), local("GTWalsheimTrial-Md");
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "GT Walsheim Trial";
+  src: local("GT Walsheim Trial Bd"), local("GTWalsheimTrial-Bd");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "GT Walsheim Trial";
+  src: local("GT Walsheim Trial U Bd"), local("GTWalsheimTrial-UBd");
+  font-weight: 800;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "GT Walsheim Trial";
+  src: local("GT Walsheim Trial Bl"), local("GTWalsheimTrial-Bl");
+  font-weight: 900;
   font-style: normal;
   font-display: block;
 }
 
 @theme {
-  --font-sans: "Urbanist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: "GT Walsheim Trial", "GT Walsheim", -apple-system, system-ui, sans-serif;
 
-  --color-bg: #000000;
-  --color-surface: #0b0b0c;
-  --color-surface-hover: #131315;
-  --color-surface-active: #19191c;
+  --color-bg: #010513;
+  --color-surface: #070b1b;
+  --color-surface-hover: #0e1329;
+  --color-surface-active: #121838;
+  --color-surface-2: #0a0f22;
 
-  --color-line: rgba(255, 255, 255, 0.06);
-  --color-line-strong: rgba(255, 255, 255, 0.12);
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line-strong: rgba(255, 255, 255, 0.13);
+
+  --color-on-white: #010513;
 
   --color-fg: #f5f5f7;
   --color-fg-2: rgba(245, 245, 247, 0.62);

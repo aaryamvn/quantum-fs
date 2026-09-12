@@ -1,9 +1,9 @@
 import type {
   BackendEvent,
+  CreateVaultInput,
   DaemonStatus,
   JoinCode,
   OrchestrationServer,
-  ServerId,
   Vault,
 } from "./types";
 
@@ -18,7 +18,7 @@ export interface BackendClient {
   status(): Promise<DaemonStatus>;
   listServers(): Promise<OrchestrationServer[]>;
   addServer(input: { name: string; address: string }): Promise<OrchestrationServer>;
-  createVault(serverId: ServerId, name: string): Promise<Vault>;
+  createVault(input: CreateVaultInput): Promise<Vault>;
   joinVault(code: JoinCode): Promise<Vault>;
   /** Returns an unsubscribe function. */
   subscribe(listener: (e: BackendEvent) => void): () => void;
