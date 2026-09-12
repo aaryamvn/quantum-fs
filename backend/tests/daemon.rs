@@ -10,7 +10,7 @@ use quantam_fs::{
     config::Config,
     daemon::{member_role, MemberRole},
     ids::PeerId,
-    keystore::{load_or_create_identity_path, IdentityState},
+    keystore::KeyStore,
 };
 
 struct TestDir(PathBuf);
@@ -74,22 +74,23 @@ fn config_resolves_identity_and_reads_raw_host_id() -> Result<(), Box<dyn std::e
 }
 
 #[test]
-fn identity_placeholder_is_empty_and_existing_bytes_are_preserved(
+fn identity_is_generated_reloaded_and_corruption_is_not_overwritten(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let dir = TestDir::new()?;
     let path = dir.0.join("keys/identity");
-    assert_eq!(
-        load_or_create_identity_path(&path)?.state,
-        IdentityState::Pending
-    );
-    assert!(fs::read(&path)?.is_empty());
-    fs::write(&path, b"unverified existing identity")?;
-    assert_eq!(
-        load_or_create_identity_path(&path)?.state,
-        IdentityState::ExistingUnverified
-    );
-    assert_eq!(fs::read(&path)?, b"unverified existing identity");
-    assert!(load_or_create_identity_path(&dir.0).is_err());
+    let store = KeyStore::open(&path)?;
+    let first = store.identity()?;
+    first.verify()?;
+    assert!(!fs::read(&path)?.is_empty());
+    assert!(KeyStore::open(&path).is_err());
+    drop(store);
+    let reloaded = KeyStore::open(&path)?;
+    assert!(reloaded.identity()? == first);
+    drop(reloaded);
+    fs::write(&path, b"corrupted identity")?;
+    assert!(KeyStore::open(&path).is_err());
+    assert_eq!(fs::read(&path)?, b"corrupted identity");
+    assert!(KeyStore::open(&dir.0).is_err());
     Ok(())
 }
 

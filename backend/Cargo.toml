@@ -2,6 +2,7 @@
 name = "quantam-fs"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.89"
 publish = false
 
 [lib]
@@ -13,6 +14,12 @@ name = "qfsd"
 path = "src/main.rs"
 
 [dependencies]
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc", "zeroize"] }
 clap = { version = "4", features = ["derive"] }
+hkdf = "0.12.4"
+ml-dsa = { version = "0.1.1", default-features = false, features = ["alloc", "rand_core", "zeroize"] }
+rand = "0.10.0"
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "rt", "signal"] }
+tokio = { version = "1", features = ["macros", "rt", "signal", "time"] }
+x-wing = { version = "0.1.0", default-features = false, features = ["zeroize"] }
+zeroize = { version = "1.8.1", features = ["derive"] }

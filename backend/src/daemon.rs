@@ -1,4 +1,14 @@
-use crate::{config::Config, ids::PeerId, keystore, Result};
+use crate::{
+    config::Config,
+    crypto::{
+        identity::IdentityManager,
+        wrap::{RustCryptoConstructionBWrap, ROTATION_INTERVAL_SECS},
+    },
+    ids::PeerId,
+    keystore::KeyStore,
+    Result,
+};
+use std::time::Duration;
 
 /// H is a role of an authenticated member, never a separate process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,26 +34,36 @@ pub async fn run(config: Config) -> Result<()> {
 
     let host_id = config.load_host_id()?;
     std::fs::create_dir_all(&config.data_dir)?;
-    let identity = keystore::load_or_create_identity_path(&config.identity_path())?;
+    let store = KeyStore::open(&config.identity_path())?;
+    let identity = store.load_or_create()?;
+    let wraps = RustCryptoConstructionBWrap::new(store.clone());
     eprintln!(
-        "qfsd: crypto pending; identity {:?}; configured listen address {} (inactive); host {}",
-        identity.state,
+        "qfsd: identity verified; crypto ready; role {:?}; configured listen address {} (inactive); {} pending wraps",
+        member_role(&identity.peer_id, host_id.as_ref()),
         config.listen_addr,
-        if host_id.is_some() {
-            "configured; role pending identity verification"
-        } else {
-            "unconfigured"
-        }
+        store.pending_wraps()?.len()
     );
-    // No crypto operation is invoked until a real identity and fresh pair epochs
-    // can be established. Stored K_ab/counters must never resume across restart.
+    // Startup prepared fresh epochs; transport will later deliver pending wraps.
+    // A running daemon rotates at least weekly without changing its static ek.
     #[cfg(unix)]
-    tokio::select! {
-        _ = interrupt.recv() => {},
-        _ = terminate.recv() => {},
+    loop {
+        tokio::select! {
+            _ = interrupt.recv() => break,
+            _ = terminate.recv() => break,
+            _ = tokio::time::sleep(Duration::from_secs(ROTATION_INTERVAL_SECS)) => {
+                eprintln!("qfsd: prepared {} rotated pair wraps", wraps.rotate_all()?);
+            }
+        }
     }
     #[cfg(not(unix))]
-    tokio::signal::ctrl_c().await?;
+    loop {
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => { result?; break; },
+            _ = tokio::time::sleep(Duration::from_secs(ROTATION_INTERVAL_SECS)) => {
+                eprintln!("qfsd: prepared {} rotated pair wraps", wraps.rotate_all()?);
+            }
+        }
+    }
     eprintln!("qfsd: shutdown complete");
     Ok(())
 }

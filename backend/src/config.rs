@@ -6,18 +6,14 @@ use crate::{ids::PeerId, Error, Result};
 
 /// CLI configuration; relative identity paths are resolved inside data_dir.
 #[derive(Parser, Debug)]
-#[command(
-    name = "qfsd",
-    version,
-    about = "Local-first file-system daemon (crypto pending)"
-)]
+#[command(name = "qfsd", version, about = "Local-first file-system daemon")]
 pub struct Config {
     #[arg(long, default_value = ".qfs")]
     pub data_dir: PathBuf,
-    /// Reserved address; the scaffold does not open a network listener.
+    /// Reserved address; networking is not implemented yet.
     #[arg(long, default_value = "127.0.0.1:7447")]
     pub listen_addr: SocketAddr,
-    /// Local member identity path (created as an empty placeholder).
+    /// Private local member identity and independent key seeds.
     #[arg(long, default_value = "identity")]
     pub peer_identity_path: PathBuf,
     /// Appointed H's raw 32-byte peer-id file; no text/hex ID encoding.

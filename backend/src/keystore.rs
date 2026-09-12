@@ -1,77 +1,518 @@
-//! Only identity-path lifecycle exists. No real key material is generated or persisted.
+//! Private local persistence. Handles expose no key bytes and expire with the
+//! keystore instance. Restart discards old AES slots and prepares fresh wraps.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::ErrorKind,
+    io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
-use crate::{crypto::identity::IdentityDocument, ids::PeerId, Error, Result};
+use rand::TryRng;
+use zeroize::Zeroizing;
 
-pub struct IdentityPath {
-    pub path: PathBuf,
-    pub state: IdentityState,
+use crate::{
+    crypto::{
+        aead::{PairKeyHandle, PairKeyState},
+        identity::{IdentityDocument, IdentityManager, LocalIdentity},
+        sign::{PureMlDsa, RustCryptoPureMlDsa, SigningKeyHandle, WRAP_CONTEXT},
+        wrap::{ConstructionBWrap, PairSession, RustCryptoConstructionBWrap, WrapMessage},
+    },
+    encoding,
+    ids::{Epoch, PeerId},
+    Error, Result,
+};
+
+const MAX_STORE_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Clone)]
+pub struct KeyStore {
+    inner: Arc<Mutex<StoreInner>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IdentityState {
-    Pending,
-    /// Existing bytes are preserved; they are not parsed, trusted, or used yet.
-    ExistingUnverified,
+pub(crate) struct StoreInner {
+    pub(crate) local: LocalIdentity,
+    pub(crate) peers: BTreeMap<PeerId, IdentityDocument>,
+    pub(crate) pairs: BTreeMap<PeerId, PersistedPair>,
+    pub(crate) keys: BTreeMap<u64, PairKeyState>,
+    pub(crate) retry_epochs: BTreeMap<PeerId, Epoch>,
+    pub(crate) instance_id: [u8; 32],
+    pub(crate) next_slot: u64,
+    identity_path: PathBuf,
+    state_path: PathBuf,
+    _lock: File,
+    failed: bool,
 }
 
-/// Create an empty placeholder atomically, or load its existing state without truncation.
-pub fn load_or_create_identity_path(path: &Path) -> Result<IdentityPath> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = match options.open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => File::open(path)?,
-        Err(error) => return Err(error.into()),
-    };
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(Error::InvalidInput("identity path must be a regular file"));
-    }
-    let state = if metadata.len() == 0 {
-        IdentityState::Pending
-    } else {
-        IdentityState::ExistingUnverified
-    };
-    Ok(IdentityPath {
-        path: path.to_owned(),
-        state,
-    })
+pub(crate) struct PersistedState {
+    pub(crate) local_id: PeerId,
+    pub(crate) next_slot: u64,
+    pub(crate) peers: Vec<IdentityDocument>,
+    pub(crate) pairs: Vec<PersistedPair>,
+    pub(crate) keys: Vec<PersistedKey>,
 }
 
-/// A future implementation must verify the signature and self-certifying peer_id
-/// before returning any identity as authenticated. Secrets must zeroize on drop.
+#[derive(Clone)]
+pub(crate) struct PersistedPair {
+    pub(crate) peer_id: PeerId,
+    pub(crate) epoch: Epoch,
+    pub(crate) initiator: PeerId,
+    pub(crate) wrap: WrapMessage,
+}
+
+pub(crate) struct PersistedKey {
+    pub(crate) slot: u64,
+    pub(crate) peer_id: PeerId,
+    pub(crate) epoch: Epoch,
+    pub(crate) key: Zeroizing<[u8; 32]>,
+}
+
+impl KeyStore {
+    /// Exclusively load/create this member and prepare fresh epochs for known
+    /// pairs. Canonical signed wraps are available via pending_wraps; no I/O to peers.
+    pub fn open(path: &Path) -> Result<Self> {
+        ensure_parent(path)?;
+        let lock = private_options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(sibling(path, ".lock"))?;
+        lock.try_lock()
+            .map_err(|_| Error::State("identity keystore is already open"))?;
+        let bytes = read_private(path)?;
+        let state_path = sibling(path, ".keys");
+        if bytes.as_ref().is_none_or(|bytes| bytes.is_empty()) && state_path.try_exists()? {
+            return Err(Error::State("identity is missing while pair state exists"));
+        }
+        let local = match bytes {
+            Some(bytes) if !bytes.is_empty() => encoding::decode_local_identity(&bytes)?,
+            _ => {
+                let local = LocalIdentity::generate()?;
+                atomic_private_write(path, &encoding::encode_local_identity(&local)?)?;
+                local
+            }
+        };
+        let mut inner = StoreInner {
+            local,
+            peers: BTreeMap::new(),
+            pairs: BTreeMap::new(),
+            keys: BTreeMap::new(),
+            retry_epochs: BTreeMap::new(),
+            instance_id: random_bytes()?,
+            next_slot: 0,
+            identity_path: path.to_owned(),
+            state_path,
+            _lock: lock,
+            failed: false,
+        };
+        if let Some(bytes) = read_private(&inner.state_path)? {
+            let persisted = encoding::decode_store_state(&bytes)?;
+            if persisted.local_id != inner.local.document.peer_id {
+                return Err(Error::AuthenticationFailed);
+            }
+            inner.next_slot = persisted.next_slot;
+            for peer in persisted.peers {
+                peer.verify()?;
+                if peer.peer_id == inner.local.document.peer_id
+                    || inner.peers.insert(peer.peer_id, peer).is_some()
+                {
+                    return Err(Error::InvalidInput("duplicate or local persisted peer"));
+                }
+            }
+            for pair in persisted.pairs {
+                let peer = inner
+                    .peers
+                    .get(&pair.peer_id)
+                    .ok_or(Error::AuthenticationFailed)?;
+                let local_id = inner.local.document.peer_id;
+                let signer = if pair.initiator == local_id {
+                    &inner.local.document
+                } else if pair.initiator == peer.peer_id {
+                    peer
+                } else {
+                    return Err(Error::AuthenticationFailed);
+                };
+                if pair.epoch != pair.wrap.epoch
+                    || pair.wrap.min_id != local_id.min(peer.peer_id)
+                    || pair.wrap.max_id != local_id.max(peer.peer_id)
+                {
+                    return Err(Error::AuthenticationFailed);
+                }
+                RustCryptoPureMlDsa.verify(
+                    &signer.vk,
+                    WRAP_CONTEXT,
+                    &encoding::wrap_m(&pair.wrap)?,
+                    &pair.wrap.signature,
+                )?;
+                if inner.pairs.insert(pair.peer_id, pair).is_some() {
+                    return Err(Error::InvalidInput("duplicate persisted pair"));
+                }
+            }
+            // Decoded prior K_ab bytes are zeroized here and never activated.
+            drop(persisted.keys);
+        }
+        // Commit removal of restart-ineligible keys before preparing fresh epochs.
+        inner.persist()?;
+        let store = Self {
+            inner: Arc::new(Mutex::new(inner)),
+        };
+        let pairs: Vec<_> = {
+            let state = store.lock()?;
+            state
+                .peers
+                .values()
+                .filter_map(|peer| match state.pairs.get(&peer.peer_id) {
+                    Some(pair) => Some((peer.clone(), Some(pair.epoch))),
+                    None if state.local.document.peer_id < peer.peer_id => {
+                        Some((peer.clone(), None))
+                    }
+                    None => None,
+                })
+                .collect()
+        };
+        let wraps = RustCryptoConstructionBWrap::new(store.clone());
+        for (peer, previous) in pairs {
+            let next = Epoch(previous.map_or(Ok(1), |epoch| {
+                epoch
+                    .0
+                    .checked_add(1)
+                    .ok_or(Error::State("epoch exhausted"))
+            })?);
+            wraps.create(peer.peer_id, &peer.ek, next)?;
+        }
+        Ok(store)
+    }
+
+    pub(crate) fn lock(&self) -> Result<MutexGuard<'_, StoreInner>> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| Error::State("keystore lock poisoned"))?;
+        if inner.failed {
+            return Err(Error::State("keystore persistence failed; reopen required"));
+        }
+        Ok(inner)
+    }
+
+    pub fn peer_id(&self) -> Result<PeerId> {
+        Ok(self.lock()?.local.document.peer_id)
+    }
+
+    pub fn identity(&self) -> Result<IdentityDocument> {
+        Ok(self.lock()?.local.document.clone())
+    }
+
+    pub fn signing_key(&self) -> Result<SigningKeyHandle> {
+        Ok(self.lock()?.local.signing_key.clone())
+    }
+
+    /// Only a verified identity may become a source of an encapsulation key.
+    pub fn import_peer(&self, document: IdentityDocument) -> Result<()> {
+        document.verify()?;
+        let mut inner = self.lock()?;
+        if document.peer_id == inner.local.document.peer_id {
+            return Err(Error::InvalidInput(
+                "cannot import the local member as a peer",
+            ));
+        }
+        let mut rewrap = false;
+        if let Some(previous) = inner.peers.get(&document.peer_id) {
+            if document != *previous && document.created_at <= previous.created_at {
+                return Err(Error::AuthenticationFailed);
+            }
+            rewrap = previous.ek != document.ek && inner.pairs.contains_key(&document.peer_id);
+        }
+        let peer_id = document.peer_id;
+        let ek = document.ek.clone();
+        inner.peers.insert(document.peer_id, document);
+        inner.persist()?;
+        drop(inner);
+        if rewrap {
+            // A cached ciphertext addressed to a retired ek cannot be retried.
+            // Keep its live K_ab until drain, but prepare a new epoch for the new ek.
+            let result = RustCryptoConstructionBWrap::new(self.clone()).create(
+                peer_id,
+                &ek,
+                self.next_epoch(&peer_id)?,
+            );
+            if let Err(error) = result {
+                self.lock()?.failed = true;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn rotate_identity_ek(&self) -> Result<IdentityDocument> {
+        let mut inner = self.lock()?;
+        let rotated = inner.local.rotate_ek()?;
+        if let Err(error) = atomic_private_write(
+            &inner.identity_path,
+            &encoding::encode_local_identity(&rotated)?,
+        ) {
+            inner.failed = true;
+            return Err(error);
+        }
+        inner.local = rotated;
+        Ok(inner.local.document.clone())
+    }
+
+    pub fn pending_wraps(&self) -> Result<Vec<WrapMessage>> {
+        let inner = self.lock()?;
+        Ok(inner
+            .pairs
+            .values()
+            .filter(|pair| pair.initiator == inner.local.document.peer_id)
+            .map(|pair| pair.wrap.clone())
+            .collect())
+    }
+
+    /// A collision loser must initiate at the next epoch (last-before-collision + 2).
+    pub fn retry_epoch(&self, peer_id: &PeerId) -> Result<Option<Epoch>> {
+        Ok(self.lock()?.retry_epochs.get(peer_id).copied())
+    }
+
+    pub fn next_epoch(&self, peer_id: &PeerId) -> Result<Epoch> {
+        let inner = self.lock()?;
+        Ok(Epoch(match inner.pairs.get(peer_id) {
+            Some(pair) => pair
+                .epoch
+                .0
+                .checked_add(1)
+                .ok_or(Error::State("epoch exhausted"))?,
+            None => 1,
+        }))
+    }
+
+    pub fn session(&self, peer_id: PeerId, epoch: Epoch) -> Result<PairSession> {
+        let inner = self.lock()?;
+        inner.session(peer_id, epoch)
+    }
+
+    /// Call after an old epoch's in-flight work drains. All clones of this slot
+    /// become unusable, and its key bytes are zeroized when removed.
+    pub fn retire(&self, handle: &PairKeyHandle) -> Result<()> {
+        let mut inner = self.lock()?;
+        if handle.store_id != inner.instance_id || inner.keys.remove(&handle.slot).is_none() {
+            return Err(Error::KeyUnavailable);
+        }
+        inner.persist()
+    }
+
+    pub(crate) fn with_pair_state<T>(
+        &self,
+        handle: &PairKeyHandle,
+        operation: impl FnOnce(&mut PairKeyState) -> Result<T>,
+    ) -> Result<T> {
+        let mut inner = self.lock()?;
+        if handle.store_id != inner.instance_id {
+            return Err(Error::KeyUnavailable);
+        }
+        let key = inner
+            .keys
+            .get_mut(&handle.slot)
+            .ok_or(Error::KeyUnavailable)?;
+        operation(key)
+    }
+}
+
+impl StoreInner {
+    pub(crate) fn session(&self, peer_id: PeerId, epoch: Epoch) -> Result<PairSession> {
+        let slot = self
+            .keys
+            .iter()
+            .find_map(|(slot, state)| {
+                (state.peer_id == peer_id && state.epoch == epoch).then_some(*slot)
+            })
+            .ok_or(Error::KeyUnavailable)?;
+        Ok(PairSession::new(
+            peer_id,
+            epoch,
+            PairKeyHandle {
+                slot,
+                store_id: self.instance_id,
+            },
+        ))
+    }
+
+    pub(crate) fn install(
+        &mut self,
+        peer_id: PeerId,
+        initiator: PeerId,
+        message: WrapMessage,
+        key: Zeroizing<[u8; 32]>,
+    ) -> Result<PairSession> {
+        let epoch = message.epoch;
+        let slot = self.next_slot;
+        self.next_slot = slot
+            .checked_add(1)
+            .ok_or(Error::State("keystore slots exhausted"))?;
+        // Competing wraps for one epoch cannot leave two active keys/counter domains.
+        self.keys
+            .retain(|_, state| state.peer_id != peer_id || state.epoch != epoch);
+        self.keys
+            .insert(slot, PairKeyState::new(key, peer_id, epoch));
+        self.pairs.insert(
+            peer_id,
+            PersistedPair {
+                peer_id,
+                epoch,
+                initiator,
+                wrap: message,
+            },
+        );
+        self.persist()?;
+        self.session(peer_id, epoch)
+    }
+
+    pub(crate) fn persist(&mut self) -> Result<()> {
+        let state = PersistedState {
+            local_id: self.local.document.peer_id,
+            next_slot: self.next_slot,
+            peers: self.peers.values().cloned().collect(),
+            pairs: self.pairs.values().cloned().collect(),
+            keys: self
+                .keys
+                .iter()
+                .map(|(slot, state)| PersistedKey {
+                    slot: *slot,
+                    peer_id: state.peer_id,
+                    epoch: state.epoch,
+                    key: Zeroizing::new(*state.key),
+                })
+                .collect(),
+        };
+        let result = encoding::encode_store_state(&state)
+            .and_then(|bytes| atomic_private_write(&self.state_path, &bytes));
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+}
+
 pub trait IdentityKeyStore {
     fn load_or_create_identity(&self, path: &Path) -> Result<IdentityDocument>;
     fn load_verified_peer(&self, peer_id: &PeerId) -> Result<IdentityDocument>;
 }
 
-pub struct PendingKeyStore;
+impl IdentityManager for KeyStore {
+    fn load_or_create(&self) -> Result<IdentityDocument> {
+        self.identity()
+    }
+}
 
-impl IdentityKeyStore for PendingKeyStore {
-    fn load_or_create_identity(&self, _path: &Path) -> Result<IdentityDocument> {
-        Err(Error::NotImplemented(
-            "identity generation, verification, and key persistence",
-        ))
+impl IdentityKeyStore for KeyStore {
+    fn load_or_create_identity(&self, path: &Path) -> Result<IdentityDocument> {
+        let inner = self.lock()?;
+        if inner.identity_path != path {
+            return Err(Error::InvalidInput("identity path differs from open store"));
+        }
+        Ok(inner.local.document.clone())
     }
 
-    fn load_verified_peer(&self, _peer_id: &PeerId) -> Result<IdentityDocument> {
-        Err(Error::NotImplemented("verified peer identity persistence"))
+    fn load_verified_peer(&self, peer_id: &PeerId) -> Result<IdentityDocument> {
+        self.lock()?
+            .peers
+            .get(peer_id)
+            .cloned()
+            .ok_or(Error::KeyUnavailable)
     }
+}
+
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N]> {
+    let mut value = Zeroizing::new([0; N]);
+    rand::rngs::SysRng
+        .try_fill_bytes(value.as_mut())
+        .map_err(|_| Error::State("OS entropy unavailable"))?;
+    Ok(*value)
+}
+
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn ensure_parent(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(())
+}
+
+fn private_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+}
+
+fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() {
+        return Err(Error::InvalidInput("keystore path must be a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.len() != 0 && metadata.permissions().mode() & 0o077 != 0 {
+            return Err(Error::InvalidInput(
+                "keystore file permissions must be owner-only (0600)",
+            ));
+        }
+    }
+    if metadata.len() > MAX_STORE_BYTES {
+        return Err(Error::InvalidInput("keystore file is too large"));
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    File::open(path)?
+        .take(MAX_STORE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_STORE_BYTES {
+        return Err(Error::InvalidInput("keystore file is too large"));
+    }
+    Ok(Some(bytes))
+}
+
+fn atomic_private_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    if bytes.len() as u64 > MAX_STORE_BYTES {
+        return Err(Error::InvalidInput("keystore file is too large"));
+    }
+    let temporary = sibling(
+        path,
+        &format!(
+            ".tmp-{}-{}",
+            std::process::id(),
+            u64::from_be_bytes(random_bytes()?)
+        ),
+    );
+    let result = (|| -> Result<()> {
+        let mut file = private_options()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }

@@ -9,7 +9,7 @@ One crate: library `quantam_fs` and daemon `qfsd`. Runtime:
 
 ## Run
 
-Requires a stable Rust toolchain with Cargo. From the repository root:
+Requires Rust 1.89 or newer with Cargo. From the repository root:
 
 ```sh
 cd backend
@@ -18,16 +18,25 @@ cargo build
 ./target/debug/qfsd --data-dir .qfs --listen-addr 127.0.0.1:7447 --peer-identity-path identity
 ```
 
-The daemon creates the data directory and an empty identity placeholder, logs
-`crypto pending`, and waits until Ctrl-C or SIGTERM (Unix) for graceful shutdown.
-Existing identity bytes are preserved and marked unverified. Relative identity
-paths resolve under `--data-dir`; absolute paths are used directly. The configured
-listen address is parsed but no network socket is opened yet.
+The daemon creates or verifies a real identity with independently generated
+X-Wing and ML-DSA-65 keys, logs `identity verified; crypto ready`, and waits until
+Ctrl-C or SIGTERM (Unix) for graceful shutdown. Empty scaffold placeholders are
+upgraded; invalid nonempty identities are rejected without replacement. Relative
+identity paths resolve under `--data-dir`; absolute paths are used directly.
+The configured listen address is parsed; no network socket is opened yet.
+
+The identity file contains private key seeds and the signed public document.
+Sibling `.keys` and `.lock` files hold verified peers/pair state and an exclusive
+process lock. Files use owner-only permissions on Unix; keys are not encrypted
+at rest. See [`crypto-keystore.md`](../docs/decisions/crypto-keystore.md).
+On restart, prior AES slots are discarded and fresh signed wraps are prepared
+for established pairs. The daemon also prepares new epochs weekly. Networking
+will deliver these through `KeyStore::pending_wraps()`; current startup sends nothing.
 
 Optional `--host-id /path/to/host-id.bin` reads exactly 32 raw bytes identifying
 appointed member H. Host selection uses the same binary and identity as every
-member; activation awaits authenticated local identity loading. IDs have no text
-or hex wire representation. The scaffold creates no public/private keys or K_ab.
+member, selected by the verified local identity. Host behavior remains pending.
+IDs have no text or hex wire representation.
 
 ## Test
 
@@ -42,29 +51,40 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 Tests cover unsigned peer ordering, SHA-256 identity/chunk vectors, canonical
-encodings and signing payloads, nonce bits, the 32-chunk pull cap, plaintext
-storage/have-bitset, CLI parsing/help, and identity-path preservation.
+encodings and signing payloads, real KEM/signature/AEAD round trips, identity
+tampering, context separation, wrap retries and epoch collisions, restart/key
+retirement, replay windows and nonce domains, the 32-chunk pull cap, plaintext
+storage/have-bitset, and CLI/identity persistence. X-Wing uses implicit rejection:
+a wrong dk yields a different shared secret and fails wrap GCM authentication.
 
 ## Layout and implementation boundary
 
-- `src/{config,daemon,keystore,error,ids,encoding}.rs`: startup/shutdown, pending
-  identity path, host selection, errors/newtypes, canonical bytes and SHA-256.
-- `src/crypto/{identity,wrap,aead,sign}.rs`: wire-shaped identity/wrap/session
-  types and typed `NotImplemented` traits. One opaque K_ab handle serves both
-  packets and file bytes; no real cryptographic operation is implemented.
+- `src/{config,daemon,keystore,error,ids,encoding}.rs`: identity loading,
+  startup/shutdown, host selection, opaque durable key slots, canonical bytes,
+  bounded local persistence decoding, errors/newtypes, and SHA-256.
+- `src/crypto/{identity,wrap,aead,sign}.rs`: verified self-certifying identities,
+  Pure ML-DSA-65 signatures with identity/wrap/manifest/flush contexts, X-Wing
+  Construction B, single-use HKDF-SHA256 wrap keys, and AES-256-GCM. One opaque
+  K_ab handle serves packets and file bytes. Secret buffers and retired slots
+  zeroize; imported EK rotation prepares a fresh wrap for the same principal.
 - `src/protocol/{packet,manifest,pull}.rs`: headers, manifests, bounded pull
-  requests, and replay-window state (W=1024; acceptance logic pending).
+  requests, and per-peer/epoch/direction/type sliding-window acceptance (W=1024).
+  Authentication must succeed before a receive counter is marked accepted.
 - `src/store/chunks.rs`: in-memory plaintext put/get/has and have-bitset; no
   durable storage, per-peer ciphertext replicas, or stored random chunk nonce.
 - `src/sync/{pull,host}.rs`: stub pull and appointed-host presence TTL, ordered
   mailbox/challenge/flush, and control fan-out interfaces. H is TCB for all shared
   plaintext; live cursors go direct pairwise GCM, without DSA or H.
 
-Later agents still owe X-Wing Construction B wrap with generated K_ab and a
-single-use HKDF-SHA256 wrap_key (retry resends the same ciphertext); Pure ML-DSA-65
-identity/wrap/manifest/flush authentication; AES-256-GCM, fresh epochs/counters
-and sliding-window acceptance; key generation, verification, zeroization and
-persistence; encrypt-at-send pull validation/orchestration; host presence,
-ordered mailbox behavior and control fan-out; and networking. Static ek rotation
-does not provide forward secrecy. No client GUI or separate host program exists
-in this crate.
+Crypto callers import verified peer documents before creating wraps. First
+contact starts at epoch 1 from the smaller PeerId; later creation requires the
+next epoch. `retry()` returns the cached ciphertext. A simultaneous-wrap loser
+uses `retry_collision()` at the epoch before collision plus two; the winner's
+key remains available for in-flight data. Retire old session handles
+with `KeyStore::retire()` after in-flight work drains. AES send counters must
+strictly increase per type; use the same header for canonical AAD and nonce.
+
+Still left: encrypt-at-send pull validation/orchestration; host presence,
+ordered mailbox/challenge/flush behavior and control fan-out; networking and
+delivery/acknowledgment of wraps; durable chunk storage. Static ek rotation does
+not provide forward secrecy. There is no per-packet DSA or second content key.
