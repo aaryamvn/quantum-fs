@@ -4,6 +4,10 @@ impl HostState {
     fn metadata(&self) -> ReplicaMetadata {
         let mut metadata = ReplicaMetadata::new(self.expected_root);
         metadata.members = self.members.clone();
+        metadata.denied = self.denied.clone();
+        metadata.historical_members = self.historical_members.clone();
+        metadata.identity_documents = self.identity_documents.clone();
+        metadata.admission = self.admission.clone();
         metadata.dirents = self.tree.dirents();
         metadata.manifests = self
             .manifests
@@ -121,6 +125,10 @@ impl HostService {
                 acked_through: metadata.acked_through,
                 host_id: local,
                 members: metadata.members,
+                denied: metadata.denied,
+                historical_members: metadata.historical_members,
+                identity_documents: metadata.identity_documents,
+                admission: metadata.admission,
                 chunks: Arc::new(Mutex::new(chunks)),
                 manifests,
                 log: metadata.log,
@@ -155,6 +163,8 @@ impl HostService {
             challenges: BTreeMap::new(),
             running: true,
             defer_persistence: false,
+            admission_path: None,
+            disconnects: Vec::new(),
         };
         for (&peer, queue) in &host.state.mailboxes {
             if !queue.is_empty() {
@@ -183,6 +193,11 @@ impl HostService {
     }
 
     pub(super) fn publish_state(&mut self, mut staged: HostState) -> Result<()> {
+        membership::archive_host(&self.keys, &mut staged)?;
+        if let Some(admission) = &mut staged.admission {
+            admission.members = staged.members.iter().copied().collect();
+            admission.denied = staged.denied.clone();
+        }
         let floor = staged
             .members
             .iter()
@@ -200,6 +215,9 @@ impl HostService {
         // outgoing return occurs before the atomic metadata write succeeds.
         if self.defer_persistence {
             next_chunks.set_metadata(metadata);
+        } else if let (Some(path), Some(admission)) = (&self.admission_path, &metadata.admission) {
+            let bytes = encoding::encode_vault_metadata(admission)?;
+            next_chunks.persist_metadata_with_admission(metadata, path, &bytes)?;
         } else {
             next_chunks.persist_metadata(metadata)?;
         }
@@ -224,6 +242,9 @@ impl HostService {
         self.require_member(peer)?;
         if through >= self.state.next_control {
             return Err(Error::InvalidInput("ack exceeds host log"));
+        }
+        if self.acked_through(peer) >= through {
+            return Ok(());
         }
         let mut staged = self.stage_state()?;
         let ack = staged.acked_through.entry(peer).or_default();
@@ -285,6 +306,9 @@ impl MemberReplica {
             keys,
             host_id,
             members: metadata.members,
+            denied: metadata.denied,
+            historical_members: metadata.historical_members,
+            identity_documents: metadata.identity_documents,
             chunks: Arc::new(Mutex::new(chunks)),
             manifests,
             controls: metadata
@@ -308,7 +332,10 @@ impl MemberReplica {
 
     pub(super) fn metadata_for(&self, staged: &StagedReplica) -> Result<ReplicaMetadata> {
         let mut metadata = ReplicaMetadata::new(self.expected_root);
-        metadata.members = self.members.clone();
+        metadata.members = staged.members.clone();
+        metadata.denied = staged.denied.clone();
+        metadata.historical_members = staged.historical_members.clone();
+        metadata.identity_documents = staged.identity_documents.clone();
         metadata.dirents = staged.tree.dirents();
         metadata.manifests = staged
             .manifests
@@ -342,16 +369,42 @@ fn verified_manifests(
     keys: &KeyStore,
     metadata: &ReplicaMetadata,
 ) -> Result<BTreeMap<FileId, TrustedManifest>> {
+    for (&peer, document) in &metadata.identity_documents {
+        if peer != document.peer_id {
+            return Err(Error::AuthenticationFailed);
+        }
+        document.verify()?;
+    }
     metadata
         .manifests
         .iter()
         .map(|(&id, manifest)| {
-            Ok((
-                id,
-                TrustedManifest::verify(manifest.clone(), keys, &metadata.members)?,
-            ))
+            Ok((id, {
+                let writer = match metadata.identity_documents.get(&manifest.writer_id) {
+                    Some(document) => document.clone(),
+                    None if manifest.writer_id == keys.peer_id()? => keys.identity()?,
+                    None => keys.load_verified_peer(&manifest.writer_id)?,
+                };
+                TrustedManifest::verify_accepted(manifest.clone(), &writer)?
+            }))
         })
         .collect()
+}
+
+pub(super) fn verify_record_manifest(
+    manifest: Manifest,
+    keys: &KeyStore,
+    members: &BTreeSet<PeerId>,
+    archive: &BTreeMap<PeerId, IdentityDocument>,
+) -> Result<TrustedManifest> {
+    if !members.contains(&manifest.writer_id) {
+        return Err(Error::AuthenticationFailed);
+    }
+    if let Some(writer) = archive.get(&manifest.writer_id) {
+        TrustedManifest::verify_accepted(manifest, writer)
+    } else {
+        TrustedManifest::verify(manifest, keys, members)
+    }
 }
 
 #[cfg(test)]

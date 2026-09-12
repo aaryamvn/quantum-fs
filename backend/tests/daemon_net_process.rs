@@ -157,12 +157,87 @@ fn three_processes_publish_join_and_shutdown_cleanly() -> Result<(), Box<dyn std
         ],
     )?;
     member.wait_for("qfsd: joined vault")?;
-    assert!(host_path.join("vault").is_file());
+    let hosted = fs::read_dir(host_path.join("vaults"))?.collect::<std::io::Result<Vec<_>>>()?;
+    assert_eq!(hosted.len(), 1);
+    assert!(hosted[0].path().join("vault").is_file());
     assert!(member_path.join("identity").is_file());
     assert!(!directory_path.join("identity").exists());
 
     member.terminate()?;
     host.terminate()?;
+    directory.terminate()?;
+    Ok(())
+}
+
+#[test]
+fn create_adds_a_vault_and_restart_serves_both_codes() -> Result<(), Box<dyn std::error::Error>> {
+    let root = TestDir::new()?;
+    let directory_path = root.0.join("directory");
+    let host_path = root.0.join("host");
+    let mut directory = DaemonProcess::spawn(
+        &directory_path,
+        &["--directory", "--listen-addr", "127.0.0.1:0"],
+    )?;
+    let directory_line = directory.wait_for("qfsd: directory listening")?;
+    let directory_addr = final_word(&directory_line)?.to_owned();
+    let create_args = [
+        "--create-vault",
+        "--directory-addr",
+        &directory_addr,
+        "--listen-addr",
+        "127.0.0.1:0",
+    ];
+    let mut first = DaemonProcess::spawn(&host_path, &create_args)?;
+    let code_a = final_word(&first.wait_for("qfsd: join code")?)?.to_owned();
+    first.wait_for("qfsd: vault listening")?;
+    first.terminate()?;
+    let mut second = DaemonProcess::spawn(&host_path, &create_args)?;
+    let code_b = final_word(&second.wait_for("qfsd: join code")?)?.to_owned();
+    second.wait_for("qfsd: vault listening")?;
+    assert_ne!(code_a, code_b);
+    assert_eq!(fs::read_dir(host_path.join("vaults"))?.count(), 2);
+    second.terminate()?;
+    let mut restarted = DaemonProcess::spawn(
+        &host_path,
+        &[
+            "--directory-addr",
+            &directory_addr,
+            "--listen-addr",
+            "127.0.0.1:0",
+        ],
+    )?;
+    restarted.wait_for("qfsd: vault listening")?;
+    assert!(!restarted
+        .lines
+        .iter()
+        .any(|line| line.contains("qfsd: join code")));
+    let mut a = DaemonProcess::spawn(
+        &root.0.join("a"),
+        &[
+            "--join-code",
+            &code_a,
+            "--directory-addr",
+            &directory_addr,
+            "--listen-addr",
+            "127.0.0.1:0",
+        ],
+    )?;
+    let mut b = DaemonProcess::spawn(
+        &root.0.join("b"),
+        &[
+            "--join-code",
+            &code_b,
+            "--directory-addr",
+            &directory_addr,
+            "--listen-addr",
+            "127.0.0.1:0",
+        ],
+    )?;
+    a.wait_for("qfsd: joined vault")?;
+    b.wait_for("qfsd: joined vault")?;
+    a.terminate()?;
+    b.terminate()?;
+    restarted.terminate()?;
     directory.terminate()?;
     Ok(())
 }

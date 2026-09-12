@@ -48,6 +48,26 @@ impl TrustedManifest {
         Ok(Self(manifest))
     }
 
+    /// Local snapshots contain records already accepted by H at their original
+    /// membership epoch. Recheck cryptographic authenticity without retroactive
+    /// live membership authorization. Never use this for a new writer commit.
+    pub(crate) fn verify_accepted(
+        manifest: Manifest,
+        writer: &crate::crypto::identity::IdentityDocument,
+    ) -> Result<Self> {
+        writer.verify()?;
+        if manifest.writer_id != writer.peer_id {
+            return Err(Error::AuthenticationFailed);
+        }
+        RustCryptoPureMlDsa.verify(
+            &writer.vk,
+            MANIFEST_CONTEXT,
+            &encoding::manifest_m(&manifest)?,
+            &manifest.signature,
+        )?;
+        Ok(Self(manifest))
+    }
+
     pub fn manifest(&self) -> &Manifest {
         &self.0
     }

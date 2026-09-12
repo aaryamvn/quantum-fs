@@ -10,7 +10,14 @@ pub enum Error {
     KeyUnavailable,
     State(&'static str),
     ReplayRejected,
-    EpochConflict { retry_epoch: crate::ids::Epoch },
+    EpochConflict {
+        retry_epoch: crate::ids::Epoch,
+    },
+    VaultSessionConflict {
+        peer_id: crate::ids::PeerId,
+        bound: crate::net::VaultId,
+        requested: crate::net::VaultId,
+    },
     Io(io::Error),
 }
 
@@ -25,6 +32,9 @@ impl fmt::Display for Error {
             Self::ReplayRejected => f.write_str("replayed or expired counter"),
             Self::EpochConflict { retry_epoch } => {
                 write!(f, "epoch conflict; retry at epoch {}", retry_epoch.0)
+            }
+            Self::VaultSessionConflict { .. } => {
+                f.write_str("peer already has a live session bound to another vault")
             }
             Self::Io(error) => write!(f, "I/O error: {error}"),
         }

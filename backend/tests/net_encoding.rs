@@ -1,4 +1,7 @@
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::{
+    collections::BTreeSet,
+    net::{Ipv6Addr, SocketAddr, SocketAddrV6},
+};
 
 use quantam_fs::{
     crypto::{identity::IdentityDocument, wrap::WrapMessage},
@@ -213,7 +216,15 @@ fn mailbox_transport_digest_is_ordered_and_ignores_host_timestamp() -> Result<()
     second.seq = Seq(5);
     assert_ne!(
         encoding::mailbox_digest(&[first.clone(), second.clone()])?,
-        encoding::mailbox_digest(&[second, first])?
+        encoding::mailbox_digest(&[second, first.clone()])?
+    );
+    assert_eq!(
+        encoding::flush_transport_digest(std::slice::from_ref(&first), &[])?,
+        encoding::mailbox_digest(std::slice::from_ref(&first))?
+    );
+    assert_ne!(
+        encoding::flush_transport_digest(std::slice::from_ref(&first), &[document(7)])?,
+        encoding::flush_transport_digest(std::slice::from_ref(&first), &[document(8)])?
     );
     Ok(())
 }
@@ -223,6 +234,8 @@ fn welcome_flush_and_encrypted_controls_are_canonical() -> Result<()> {
     let welcome = NetWelcome {
         vault_id: VaultId([1; 32]),
         members: vec![document(2), document(3)],
+        historical: vec![document(4)],
+        denied: BTreeSet::from([PeerId([5; 32])]),
     };
     let decoded = encoding::decode_net_welcome(&encoding::encode_net_welcome(&welcome)?)?;
     assert!(decoded == welcome);
@@ -230,6 +243,7 @@ fn welcome_flush_and_encrypted_controls_are_canonical() -> Result<()> {
     let offer = FlushOffer {
         challenge: FlushChallenge([4; 32]),
         frame_count: 5,
+        historical: Vec::new(),
     };
     assert_eq!(
         encoding::encode_flush_offer(&offer)?,
@@ -239,12 +253,22 @@ fn welcome_flush_and_encrypted_controls_are_canonical() -> Result<()> {
         ]
     );
     assert!(encoding::decode_flush_offer(&encoding::encode_flush_offer(&offer)?)? == offer);
+    let historical_offer = FlushOffer {
+        historical: vec![document(6), document(7)],
+        ..offer.clone()
+    };
+    assert!(
+        encoding::decode_flush_offer(&encoding::encode_flush_offer(&historical_offer)?)?
+            == historical_offer
+    );
     assert!(encoding::decode_flush_offer(&[0; 35]).is_err());
 
     let controls = [
         NetControl::JoinAccepted {
             vault_id: welcome.vault_id,
             members: welcome.members,
+            historical: welcome.historical,
+            denied: welcome.denied,
         },
         NetControl::FlushEnd { digest: [6; 32] },
         NetControl::FlushApplied { digest: [7; 32] },
@@ -267,6 +291,7 @@ fn vault_metadata_round_trip_rejects_duplicate_members() -> Result<()> {
         join_code: JoinCode([2; 16]),
         issued_at: 3,
         members: vec![PeerId([4; 32]), PeerId([5; 32])],
+        denied: BTreeSet::from([PeerId([6; 32])]),
     };
     let decoded = encoding::decode_vault_metadata(&encoding::encode_vault_metadata(&metadata)?)?;
     assert_eq!(decoded.vault_id, metadata.vault_id);

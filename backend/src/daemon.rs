@@ -9,11 +9,14 @@ use crate::{
         wrap::{RustCryptoConstructionBWrap, ROTATION_INTERVAL_SECS},
     },
     ids::PeerId,
-    keystore::KeyStore,
+    keystore::{atomic_private_write, KeyStore},
     net::{
         directory::{serve as serve_directory, DirectoryClient, DirectoryStore},
-        join::{join_host, serve_host, unix_time, VaultHost},
+        join::{join_host, serve_host, unix_time, VaultHost, VaultMetadata},
+        vaults::VaultSet,
+        JoinCode, VaultId,
     },
+    store::vaults::{discover_vaults, migrate_legacy, prepare_vault_directory},
     sync::host::{HostService, MemberReplica},
     Error, Result,
 };
@@ -51,19 +54,59 @@ async fn run_inner(config: Config) -> Result<()> {
     let local_addr = listener.local_addr()?;
     let wraps = RustCryptoConstructionBWrap::new(keys.clone());
 
-    if config.create_vault {
-        let directory_addr = config.directory_addr.ok_or(Error::InvalidInput(
-            "--create-vault requires --directory-addr",
-        ))?;
-        let advertised = config.advertise_addr.unwrap_or(local_addr);
-        let mut vault =
-            VaultHost::open_durable(keys, &config.data_dir.join("vault"), &config.data_dir)?;
-        vault
-            .publish(&DirectoryClient::new(directory_addr), advertised)
-            .await?;
-        eprintln!("qfsd: join code {}", vault.join_code());
-        eprintln!("qfsd: vault listening {local_addr}");
-        return run_vault(listener, vault, wraps, &mut shutdown).await;
+    if config.join_code.is_none() {
+        // Migration runs before opening any replica handles, so every durable
+        // path and the one shared keystore lock still refer to the same layout.
+        if config.create_vault && config.data_dir.join("vault").try_exists()? {
+            migrate_legacy(&keys, &config.data_dir)?;
+        }
+        let mut directories = discover_vaults(&keys, &config.data_dir)?;
+        let new_id = if config.create_vault {
+            let metadata = VaultMetadata {
+                vault_id: VaultId::generate()?,
+                join_code: JoinCode::generate()?,
+                issued_at: 0,
+                members: vec![keys.peer_id()?],
+                denied: BTreeSet::new(),
+            };
+            let directory = prepare_vault_directory(&keys, &config.data_dir, metadata.vault_id)?;
+            if directory.join("vault").try_exists()?
+                || directory.join("replica.bin").try_exists()?
+            {
+                return Err(Error::State("generated vault already exists"));
+            }
+            atomic_private_write(
+                &directory.join("vault"),
+                &crate::encoding::encode_vault_metadata(&metadata)?,
+            )?;
+            directories.push((metadata.vault_id, directory));
+            Some(metadata.vault_id)
+        } else {
+            None
+        };
+        if !directories.is_empty() {
+            let vaults = VaultSet::new(keys.clone())?;
+            for (id, directory) in directories {
+                let mut vault =
+                    VaultHost::open_durable(keys.clone(), &directory.join("vault"), &directory)?;
+                if let Some(directory_addr) = config.directory_addr {
+                    // Re-advertise existing codes after bind too: an ephemeral
+                    // port or explicit NAT address can change across restarts.
+                    vault
+                        .publish(
+                            &DirectoryClient::new(directory_addr),
+                            config.advertise_addr.unwrap_or(local_addr),
+                        )
+                        .await?;
+                }
+                if Some(id) == new_id {
+                    eprintln!("qfsd: join code {}", vault.join_code());
+                }
+                vaults.insert(Rc::new(RefCell::new(vault)))?;
+            }
+            eprintln!("qfsd: vault listening {local_addr}");
+            return run_vaults(listener, vaults, wraps, &mut shutdown).await;
+        }
     }
 
     if let Some(code) = config.join_code {
@@ -115,14 +158,13 @@ async fn run_directory(config: &Config, shutdown: &mut Shutdown) -> Result<()> {
     Ok(())
 }
 
-async fn run_vault(
+async fn run_vaults(
     listener: TcpListener,
-    vault: VaultHost,
+    vaults: VaultSet,
     wraps: RustCryptoConstructionBWrap,
     shutdown: &mut Shutdown,
 ) -> Result<()> {
-    let vault = Rc::new(RefCell::new(vault));
-    let server = serve_host(listener, Rc::clone(&vault));
+    let server = serve_host(listener, vaults.clone());
     tokio::pin!(server);
     loop {
         tokio::select! {
@@ -130,12 +172,12 @@ async fn run_vault(
             result = &mut server => { result?; break; }
             _ = tokio::time::sleep(Duration::from_secs(ROTATION_INTERVAL_SECS)) => {
                 let count = wraps.rotate_all()?;
-                vault.borrow_mut().host.refresh_mailboxes()?;
+                vaults.refresh_mailboxes()?;
                 eprintln!("qfsd: prepared {count} rotated pair wraps");
             }
         }
     }
-    vault.borrow_mut().host.stop();
+    vaults.stop();
     eprintln!("qfsd: shutdown complete");
     Ok(())
 }

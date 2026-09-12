@@ -42,6 +42,7 @@ impl DurableStore {
         expected_root: FileId,
     ) -> Result<(Self, Option<ReplicaMetadata>, MemoryChunkStore)> {
         keys.require_data_dir_lock(data_dir)?;
+        crate::store::transaction::recover_admission_transaction(&data_dir.join("vault"))?;
         let chunks_dir = data_dir.join("chunks");
         fs::create_dir_all(&chunks_dir)?;
         owner_only_directory(&chunks_dir)?;
@@ -203,6 +204,69 @@ impl DurableStore {
         inner.generation = generation;
         inner.live_metadata = Some(staged.clone());
 
+        chunks.retain(|chunk_id, _| retained.contains(chunk_id));
+        if let Err(error) = sweep_directory(&inner.chunks_dir, chunks.keys().copied()) {
+            eprintln!("qfsd: deferred chunk cleanup after durable snapshot: {error}");
+        }
+        Ok(staged)
+    }
+
+    pub(crate) fn persist_with_admission(
+        &self,
+        metadata: &ReplicaMetadata,
+        chunks: &mut BTreeMap<ChunkId, Arc<ChunkRecord>>,
+        admission_path: &Path,
+        admission_bytes: &[u8],
+    ) -> Result<ReplicaMetadata> {
+        let mut inner = self.lock()?;
+        if inner.failed {
+            return Err(Error::State("durable store is poisoned"));
+        }
+        if inner.fail_next_persist {
+            inner.fail_next_persist = false;
+            return Err(Error::State("injected replica persist failure"));
+        }
+        if metadata.expected_root != inner.expected_root {
+            return Err(Error::InvalidInput("replica root differs from open store"));
+        }
+        let retained = metadata.retain_ids();
+        let mut staged = metadata.clone();
+        staged.chunk_index.clear();
+        for chunk_id in &retained {
+            if let Some(record) = chunks.get(chunk_id) {
+                staged
+                    .chunk_index
+                    .insert(*chunk_id, (record.file_id, record.index));
+            }
+        }
+        for queue in staged.mailboxes.values() {
+            for content in queue {
+                if let crate::sync::host::QueueContent::Chunk { chunk_id, .. } = content {
+                    if !chunks.contains_key(chunk_id) {
+                        return Err(Error::State("mailbox references a missing plaintext chunk"));
+                    }
+                }
+            }
+        }
+        let generation = inner
+            .generation
+            .checked_add(1)
+            .ok_or(Error::State("replica generation exhausted"))?;
+        let encoded = encoding::encode_replica(&staged, generation)?;
+        if encoded.len() as u64 > MAX_STORE_BYTES {
+            return Err(Error::InvalidInput("replica snapshot is too large"));
+        }
+        if let Err(error) = crate::store::transaction::persist(
+            Some(&inner.replica_path),
+            admission_path,
+            Some(&encoded),
+            admission_bytes,
+        ) {
+            inner.failed = true;
+            return Err(error);
+        }
+        inner.generation = generation;
+        inner.live_metadata = Some(staged.clone());
         chunks.retain(|chunk_id, _| retained.contains(chunk_id));
         if let Err(error) = sweep_directory(&inner.chunks_dir, chunks.keys().copied()) {
             eprintln!("qfsd: deferred chunk cleanup after durable snapshot: {error}");

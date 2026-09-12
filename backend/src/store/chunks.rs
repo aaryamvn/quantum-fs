@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -116,6 +117,26 @@ impl MemoryChunkStore {
         Ok(())
     }
 
+    pub fn persist_metadata_with_admission(
+        &mut self,
+        metadata: ReplicaMetadata,
+        path: &Path,
+        admission_bytes: &[u8],
+    ) -> Result<()> {
+        if let Some(durable) = self.durable.clone() {
+            self.metadata = Some(durable.persist_with_admission(
+                &metadata,
+                &mut self.chunks,
+                path,
+                admission_bytes,
+            )?);
+        } else {
+            crate::store::transaction::persist(None, path, None, admission_bytes)?;
+            self.metadata = Some(metadata);
+        }
+        Ok(())
+    }
+
     pub fn persist_current(&mut self) -> Result<()> {
         let Some(metadata) = self.metadata() else {
             return Ok(());
@@ -132,6 +153,18 @@ impl MemoryChunkStore {
 
     pub fn remove_file(&mut self, file_id: &FileId) {
         self.chunks.retain(|_, record| record.file_id != *file_id);
+        if let Some(metadata) = &mut self.metadata {
+            metadata
+                .chunk_index
+                .retain(|_, (indexed_file, _)| indexed_file != file_id);
+        }
+    }
+
+    pub(crate) fn file_chunk_count(&self, file_id: &FileId) -> usize {
+        self.chunks
+            .values()
+            .filter(|record| record.file_id == *file_id)
+            .count()
     }
 
     pub fn len(&self) -> usize {
@@ -177,7 +210,10 @@ impl ChunkStore for MemoryChunkStore {
 #[cfg(test)]
 mod tests {
     use super::{ChunkStore, MemoryChunkStore};
-    use crate::ids::{ChunkId, FileId};
+    use crate::{
+        ids::{ChunkId, FileId},
+        store::replica::ReplicaMetadata,
+    };
 
     #[test]
     fn stores_plaintext_and_reports_have_vector_in_request_order() {
@@ -194,5 +230,22 @@ mod tests {
 
         store.remove_file(&FileId([3; 32]));
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn failed_memory_admission_persist_leaves_metadata_unchanged() {
+        let mut store = MemoryChunkStore::new();
+        let metadata = ReplicaMetadata::new(FileId([8; 32]));
+        let missing_parent = std::env::temp_dir()
+            .join(format!(
+                "qfs-missing-admission-parent-{}",
+                std::process::id()
+            ))
+            .join("vault");
+
+        assert!(store
+            .persist_metadata_with_admission(metadata, &missing_parent, b"admission")
+            .is_err());
+        assert!(store.metadata().is_none());
     }
 }

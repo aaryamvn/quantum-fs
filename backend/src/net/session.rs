@@ -9,7 +9,7 @@ use crate::{
     },
     encoding,
     ids::{Epoch, PeerId},
-    keystore::KeyStore,
+    keystore::{IdentityKeyStore, KeyStore},
     net::{
         directory::DirectoryAd,
         frame::{read_frame, write_frame, Frame},
@@ -32,6 +32,7 @@ pub struct EstablishedSession {
 pub struct HandshakeProgress {
     pub peer_id: Option<PeerId>,
     pub wrap_acknowledged: bool,
+    pub had_pair: bool,
 }
 
 pub async fn establish(
@@ -40,6 +41,19 @@ pub async fn establish(
     expected: Option<&DirectoryAd>,
     progress: &mut HandshakeProgress,
 ) -> Result<EstablishedSession> {
+    establish_guarded(stream, keys, expected, progress, |_| false).await
+}
+
+pub async fn establish_guarded<F>(
+    stream: &mut TcpStream,
+    keys: &KeyStore,
+    expected: Option<&DirectoryAd>,
+    progress: &mut HandshakeProgress,
+    preserve_existing: F,
+) -> Result<EstablishedSession>
+where
+    F: Fn(PeerId) -> bool,
+{
     let local = keys.identity()?;
     write_frame(
         stream,
@@ -55,7 +69,16 @@ pub async fn establish(
         return Err(Error::AuthenticationFailed);
     }
     progress.peer_id = Some(peer.peer_id);
-    keys.import_peer(peer.clone())?;
+    progress.had_pair =
+        keys.current_session(peer.peer_id).is_ok() || keys.cached_pair(peer.peer_id)?.is_some();
+    let preserve_existing = preserve_existing(peer.peer_id);
+    if preserve_existing {
+        if keys.load_verified_peer(&peer.peer_id)? != peer || !progress.had_pair {
+            return Err(Error::AuthenticationFailed);
+        }
+    } else {
+        keys.import_peer(peer.clone())?;
+    }
 
     let local_epoch = keys.peer_epoch(peer.peer_id)?;
     write_frame(
@@ -73,11 +96,75 @@ pub async fn establish(
         return Err(Error::AuthenticationFailed);
     }
 
+    if preserve_existing {
+        return finish_preserved(stream, keys, &peer, local_epoch, remote_epoch, progress).await;
+    }
+
     let wrap = RustCryptoConstructionBWrap::new(keys.clone());
     if let Some(message) = initial_wrap(keys, &wrap, &local, &peer, local_epoch, remote_epoch)? {
         send_wrap(stream, &message).await?;
     }
     finish_wrap(stream, keys, &wrap, &peer, progress).await
+}
+
+async fn finish_preserved(
+    stream: &mut TcpStream,
+    keys: &KeyStore,
+    peer: &IdentityDocument,
+    local_epoch: Epoch,
+    remote_epoch: Epoch,
+    progress: &mut HandshakeProgress,
+) -> Result<EstablishedSession> {
+    let session = keys.current_session(peer.peer_id)?;
+    if local_epoch != session.epoch || remote_epoch != session.epoch {
+        return Err(Error::State(
+            "active pair cannot rotate during another Join",
+        ));
+    }
+    let (initiator, cached) = keys
+        .cached_pair(peer.peer_id)?
+        .ok_or(Error::State("active pair has no cached wrap"))?;
+    let local_initiated = initiator == keys.peer_id()?;
+    let wrap = RustCryptoConstructionBWrap::new(keys.clone());
+    if local_initiated {
+        send_wrap(stream, &wrap.retry(&cached)?).await?;
+    }
+    let frame = read_frame(stream).await?;
+    match frame.kind {
+        WRAP_KIND if !local_initiated => {
+            let incoming = encoding::decode_wrap(&frame.payload)?;
+            if incoming != cached {
+                return Err(Error::State(
+                    "active pair cannot rotate during another Join",
+                ));
+            }
+            let opened = wrap.unwrap(peer.peer_id, &incoming)?;
+            if opened.epoch != session.epoch {
+                return Err(Error::State(
+                    "active pair cannot rotate during another Join",
+                ));
+            }
+            send_ack(stream, session.epoch, false).await?;
+        }
+        WRAP_ACK_KIND if local_initiated => {
+            let (epoch, retry_pending) = encoding::decode_wrap_ack(&frame.payload)?;
+            if retry_pending || epoch != session.epoch {
+                return Err(Error::State(
+                    "active pair cannot rotate during another Join",
+                ));
+            }
+        }
+        _ => {
+            return Err(Error::State(
+                "active pair cannot rotate during another Join",
+            ));
+        }
+    }
+    progress.wrap_acknowledged = true;
+    Ok(EstablishedSession {
+        peer: peer.clone(),
+        session,
+    })
 }
 
 fn initial_wrap(

@@ -128,6 +128,22 @@ fn file_control_records_round_trip_without_coalescing_semantics() -> Result<()> 
 }
 
 #[test]
+fn kick_control_record_is_exact_kind_seven() -> Result<()> {
+    let target = PeerId([0x7a; 32]);
+    let record = ControlRecord {
+        id: 0x0102_0304_0506_0708,
+        update: ControlUpdate::Kick(target),
+    };
+    let encoded = encode_control_record(&record)?;
+    let mut expected = record.id.to_be_bytes().to_vec();
+    expected.push(7);
+    expected.extend_from_slice(&target.0);
+    assert_eq!(encoded, expected);
+    assert!(decode_control_record(&encoded)? == record);
+    Ok(())
+}
+
+#[test]
 fn control_decoder_rejects_unknown_truncated_invalid_count_and_trailing_data() -> Result<()> {
     let mut unknown = vec![0; 8];
     unknown.push(4);

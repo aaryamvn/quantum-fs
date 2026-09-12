@@ -26,6 +26,7 @@ pub(super) fn apply_tree_update(
             }
             None
         }
+        ControlUpdate::Kick(_) => None,
         ControlUpdate::Add(_) => None, // Deprecated v1 no-op; never creates an inode.
         ControlUpdate::Clear(file_id) => Some(*file_id),
         ControlUpdate::Remove(file_id) => {
@@ -223,6 +224,8 @@ impl HostService {
             challenges: self.challenges.clone(),
             running: self.running,
             defer_persistence: true,
+            admission_path: self.admission_path.clone(),
+            disconnects: Vec::new(),
         };
         let prepared = (|| -> Result<()> {
             {

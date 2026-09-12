@@ -25,7 +25,7 @@ Run these in three terminals, each with `backend/` as its working directory:
 ```
 
 ```sh
-# H: creates or reloads one vault and prints its Base32 join code on stderr.
+# H: adds a vault, serves every hosted vault, and prints the new Base32 code.
 ./target/debug/qfsd --create-vault --data-dir .qfs-host --listen-addr 127.0.0.1:7447 --directory-addr 127.0.0.1:7440
 ```
 
@@ -35,11 +35,25 @@ read -r QFS_JOIN_CODE
 ./target/debug/qfsd --data-dir .qfs-member --listen-addr 127.0.0.1:7448 --directory-addr 127.0.0.1:7440 --join-code "$QFS_JOIN_CODE"
 ```
 
+Restart H with the same data directory and without `--create-vault` to reload
+its existing vaults. Supplying the directory address re-advertises their codes
+at the newly bound address; adding `--create-vault` creates one more vault.
+
+```sh
+./target/debug/qfsd --data-dir .qfs-host --listen-addr 127.0.0.1:7447 --directory-addr 127.0.0.1:7440
+```
+
 Successful admission logs `accepted vault member; pair live` on H and
 `joined vault` on the member. Ctrl-C or SIGTERM shuts down gracefully.
 The runtime is Tokio current-thread with `LocalSet` and `spawn_local`.
 The peer handshake deadline is five seconds, idle timeout is 30 seconds,
 and H permits 32 simultaneous provisional handshakes and 128 TCP connections.
+Members poll H every **100 ms** for presence and pending controls. Missed ticks
+are skipped and each reply drains before the next heartbeat. This reduces demo
+control latency; online file bytes still require a pull, and throughput depends
+on the link, storage and processing time.
+Presence expiry remains 30 seconds, so a silent connection failure can leave a
+peer marked online until that timeout; a detected disconnect clears presence.
 
 The listener binds before H signs its directory ad. Port zero is supported for
 binding; the resulting actual port is advertised. `--advertise-addr IP:PORT`
@@ -122,7 +136,11 @@ Durable tests cover process-state loss and reopen, metadata-only snapshot size,
 complete-file corruption, corrupt chunk discard, mailbox pins, orphan cleanup,
 write-failure atomicity, acknowledgments and root binding. Tree tests cover member
 writers, restart, strict UTF-8 paths, byte-exact names, cycle/uniqueness checks,
-serialized renames and unlink during an in-flight pull. Locate tests cover H-first
+serialized renames and unlink during an in-flight pull. Kick tests cover historical
+writer reload, atomic code/membership rollback, pair revocation and TCP closure.
+Multi-vault tests cover disjoint trees, retained bindings, process reload, migration
+recovery and lost-WrapAck ciphertext retry. Eviction tests cover host/pin/refusal,
+local availability bits, in-flight responses and empty-holder fallback. Locate tests cover H-first
 selection, member fallback, bounded concurrent discovery and exact have replies.
 TCP tests also cover member path operations, atomic failed saves, have queries,
 trusted pulls and more than 1024 queued online controls before a fresh reply.
@@ -163,7 +181,7 @@ trusted pulls and more than 1024 queued online controls before a fresh reply.
   without DSA or H. A stopped host rejects commits.
 
 - `src/net/{frame,directory,session,join,locate}.rs`: bounded versioned TCP frames,
-  signed directory, peer handshake, single-vault admission, member commits,
+  signed directory, peer handshake, vault-specific admission, member commits,
   have queries, pulls and adapters for the existing atomic mailbox staging. Frame bodies
   over 1 MiB, unknown types and unknown versions close the connection.
 
@@ -185,11 +203,17 @@ allow retry after a later corrupt frame without reopening accepted counters.
 On TCP, an authenticated end marker commits to the ordered batch; H keeps its
 snapshot until it receives the recipient's encrypted apply acknowledgment.
 The transport prepares old counters before opening that newer end marker.
+Public writer history travels in the flush offer and is bound to that encrypted
+end digest; it stays staged until the entire batch authenticates. A member can
+therefore verify files from a writer who joined and was kicked while it was offline.
 Both pull and host use the same encrypt-at-send helper and the existing packet
 and chunk counter domains on K_ab.
 
-`data_dir/chunks/<64 lowercase hex chunk_id>` holds immutable plaintext only,
-up to 1 MiB per chunk. `data_dir/replica.bin` holds the root, tree, members,
+H stores each vault at `data_dir/vaults/<64 lowercase hex vault_id>/`, containing
+`vault`, `replica.bin` and `chunks/`. Member processes retain one replica in their
+data directory. Identity, keys and the sole keystore lock stay at the data root.
+Within a replica, `chunks/<64 lowercase hex chunk_id>` holds immutable plaintext
+only, up to 1 MiB per chunk. `replica.bin` holds the root, tree, members,
 writer-signed manifests, ordered instructions, mailbox content references,
 acknowledgment watermarks and chunk index; it never contains chunk bodies or GCM
 envelopes. Its versioned header, generation, length and SHA-256 reject complete-file
@@ -234,7 +258,40 @@ or have replies, preserving W=1024. `into_state`/`resume` remains available for
 memory-only hand-offs; durable handles hold the keystore lock and must be dropped
 before reopening from disk.
 
-Still left: kick, multi-vault hosting, storage eviction, successor election and
-client GUI integration. Static ek rotation does not provide forward secrecy.
+`HostService::kick` accepts only a current member other than H. H removes the
+member from fan-out and mailboxes, logs Kick for the remaining members, persists
+denial plus a fresh code, discards the pair and requests TCP disconnection.
+`VaultHost::kick` then publishes the new code and forgets the old one; directory
+errors propagate while the old code stays invalid locally. Recipients discard
+the kicked pair after applying Kick. Offline recipients apply behind the flush
+gate; online mesh access can continue until the recipient applies that control.
+
+Kick preserves accepted files and directories. Archived public identity documents
+let restart verify historical signatures independently of current membership;
+new commits still require current membership. Kick cannot erase remote copies or
+old keys. The denylist stops the same identity rejoining accidentally; a newly
+minted identity with the current code can join. Code rotation controls entry.
+Admission and replica changes use an undo journal and the existing atomic/fsync
+writer. An interrupted two-file update rolls back before either file is served.
+
+`VaultSet` dispatches encrypted Join by vault ID on one listener. A confirmed
+pair stays bound to one vault even between TCP connections. Another-vault Join
+returns an encrypted, distinct conflict and preserves that pair and mailbox.
+Only authenticated refusal discards a new joiner's provisional pair; ambiguous
+EOF or lost WrapAck retains cached ciphertext and counters for retry. Legacy
+single-vault layouts still open. Creating a second vault migrates the first with
+`.migrate-vaults` (raw vault ID and phase), synced renames and verified, idempotent
+resume after interruption. Directory existence alone never proves completion.
+
+`MemberReplica::evict_file` removes local chunk plaintext, files and index rows,
+while retaining the tree and signed manifest. It requires a live, ungated pair
+to H and refuses mailbox-pinned chunks. H always refuses eviction. Have bits
+come directly from local chunk presence. `pull_from_holders` and its async form
+try the next holder after an empty response; inspect `PullReport::is_complete`
+(or `missing`) for partial delivery. Existing trusted pull restores evicted
+bytes. Async fetch operations must discard their stream if canceled on timeout.
+
+Still left: successor election, client GUI integration, unkick and same-peer
+multi-vault multiplexing. Static ek rotation does not provide forward secrecy.
 There is no per-packet DSA, second content key, per-peer ciphertext chunk replica,
 or random stored chunk nonce.

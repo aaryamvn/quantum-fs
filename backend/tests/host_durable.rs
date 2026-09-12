@@ -128,7 +128,8 @@ fn durable_host_recovers_chunks_members_log_and_semantic_mailbox() -> Result<()>
     host.link_file(host_id, "/file", file_id)?;
 
     let replica_size = fs::metadata(host_dir.join("replica.bin"))?.len();
-    assert!(replica_size < 16 * 1024);
+    // Signed public identity history adds metadata, never chunk plaintext.
+    assert!(replica_size < 64 * 1024);
     assert_eq!(host.mailbox(member_id)?.len(), 4);
     drop(host);
     drop(host_keys);

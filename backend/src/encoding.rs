@@ -38,8 +38,10 @@ const STORE_STATE_MAGIC: &[u8] = b"qfs/local/keys/";
 const DIRECTORY_STATE_MAGIC: &[u8] = b"qfs/local/directory/";
 const VAULT_METADATA_MAGIC: &[u8] = b"qfs/local/vault/";
 const REPLICA_MAGIC: &[u8] = b"qfs/local/replica/";
+const ADMISSION_TRANSACTION_MAGIC: &[u8] = b"qfs/local/admission-txn/";
 const LOCAL_FORMAT_VERSION: u8 = 1;
 const MAX_REPLICA_BYTES: usize = 16 * 1024 * 1024;
+const MAX_VAULT_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_DIRECTORY_RECORDS: usize = 10_000;
 
 pub fn peer_id(vk: &[u8]) -> PeerId {
@@ -386,6 +388,22 @@ pub fn encode_net_welcome(welcome: &NetWelcome) -> Result<Vec<u8>> {
     for member in &welcome.members {
         push_variable(&mut out, &encode_identity(member)?)?;
     }
+    let mut extension = Vec::new();
+    extension.push(1);
+    push_length(&mut extension, welcome.historical.len())?;
+    let mut previous = None;
+    for document in &welcome.historical {
+        if previous.is_some_and(|peer_id| peer_id >= document.peer_id) {
+            return Err(Error::InvalidInput("welcome history is not canonical"));
+        }
+        push_variable(&mut extension, &encode_identity(document)?)?;
+        previous = Some(document.peer_id);
+    }
+    push_length(&mut extension, welcome.denied.len())?;
+    for peer_id in &welcome.denied {
+        extension.extend_from_slice(&peer_id.0);
+    }
+    push_variable(&mut out, &extension)?;
     Ok(out)
 }
 
@@ -397,17 +415,65 @@ pub fn decode_net_welcome(bytes: &[u8]) -> Result<NetWelcome> {
     for _ in 0..count {
         members.push(decode_identity(reader.variable()?)?);
     }
+    let mut historical = Vec::new();
+    let mut denied = std::collections::BTreeSet::new();
+    if reader.remaining() != 0 {
+        let extension = reader.variable()?;
+        let mut extension = Reader::new(extension);
+        if extension.byte()? != 1 {
+            return Err(Error::InvalidInput("unsupported welcome extension version"));
+        }
+        let historical_count = extension.count(4)?;
+        let mut previous = None;
+        for _ in 0..historical_count {
+            let document = decode_identity(extension.variable()?)?;
+            if previous.is_some_and(|peer_id| peer_id >= document.peer_id) {
+                return Err(Error::InvalidInput("welcome history is not canonical"));
+            }
+            previous = Some(document.peer_id);
+            historical.push(document);
+        }
+        let denied_count = extension.count(32)?;
+        let mut previous = None;
+        for _ in 0..denied_count {
+            let peer_id = PeerId(extension.array()?);
+            if previous.is_some_and(|value| value >= peer_id) {
+                return Err(Error::InvalidInput("welcome denylist is not canonical"));
+            }
+            previous = Some(peer_id);
+            denied.insert(peer_id);
+        }
+        extension.finish()?;
+    }
     reader.finish()?;
-    Ok(NetWelcome { vault_id, members })
+    Ok(NetWelcome {
+        vault_id,
+        members,
+        historical,
+        denied,
+    })
 }
 
-pub fn encode_flush_offer(offer: &FlushOffer) -> Result<[u8; 36]> {
+pub fn encode_flush_offer(offer: &FlushOffer) -> Result<Vec<u8>> {
     if offer.frame_count > 1_000_000 {
         return Err(Error::InvalidInput("flush frame count exceeds cap"));
     }
-    let mut out = [0; 36];
-    out[..32].copy_from_slice(&offer.challenge.0);
-    out[32..].copy_from_slice(&offer.frame_count.to_be_bytes());
+    let mut out = Vec::new();
+    out.extend_from_slice(&offer.challenge.0);
+    out.extend_from_slice(&offer.frame_count.to_be_bytes());
+    if !offer.historical.is_empty() {
+        let mut extension = vec![1];
+        push_length(&mut extension, offer.historical.len())?;
+        let mut previous = None;
+        for document in &offer.historical {
+            if previous.is_some_and(|peer_id| peer_id >= document.peer_id) {
+                return Err(Error::InvalidInput("flush history is not canonical"));
+            }
+            push_variable(&mut extension, &encode_identity(document)?)?;
+            previous = Some(document.peer_id);
+        }
+        push_variable(&mut out, &extension)?;
+    }
     Ok(out)
 }
 
@@ -415,6 +481,26 @@ pub fn decode_flush_offer(bytes: &[u8]) -> Result<FlushOffer> {
     let mut reader = Reader::new(bytes);
     let challenge = FlushChallenge(reader.array()?);
     let frame_count = reader.u32()?;
+    let mut historical = Vec::new();
+    if reader.remaining() != 0 {
+        let mut extension = Reader::new(reader.variable()?);
+        if extension.byte()? != 1 {
+            return Err(Error::InvalidInput(
+                "unsupported flush offer extension version",
+            ));
+        }
+        let count = extension.count(4)?;
+        let mut previous = None;
+        for _ in 0..count {
+            let document = decode_identity(extension.variable()?)?;
+            if previous.is_some_and(|peer_id| peer_id >= document.peer_id) {
+                return Err(Error::InvalidInput("flush history is not canonical"));
+            }
+            previous = Some(document.peer_id);
+            historical.push(document);
+        }
+        extension.finish()?;
+    }
     reader.finish()?;
     if frame_count > 1_000_000 {
         return Err(Error::InvalidInput("flush frame count exceeds cap"));
@@ -422,17 +508,25 @@ pub fn decode_flush_offer(bytes: &[u8]) -> Result<FlushOffer> {
     Ok(FlushOffer {
         challenge,
         frame_count,
+        historical,
     })
 }
 
 pub fn encode_net_control(control: &NetControl) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     match control {
-        NetControl::JoinAccepted { vault_id, members } => {
+        NetControl::JoinAccepted {
+            vault_id,
+            members,
+            historical,
+            denied,
+        } => {
             out.push(1);
             out.extend_from_slice(&encode_net_welcome(&NetWelcome {
                 vault_id: *vault_id,
                 members: members.clone(),
+                historical: historical.clone(),
+                denied: denied.clone(),
             })?);
         }
         NetControl::FlushEnd { digest } => {
@@ -449,6 +543,12 @@ pub fn encode_net_control(control: &NetControl) -> Result<Vec<u8>> {
             out.push(5);
             out.extend_from_slice(&through.to_be_bytes());
         }
+        NetControl::JoinRejected { bound, requested } => {
+            out.push(6);
+            out.extend_from_slice(&bound.0);
+            out.extend_from_slice(&requested.0);
+        }
+        NetControl::AdmissionDenied => out.push(7),
     }
     Ok(out)
 }
@@ -461,6 +561,8 @@ pub fn decode_net_control(bytes: &[u8]) -> Result<NetControl> {
             NetControl::JoinAccepted {
                 vault_id: welcome.vault_id,
                 members: welcome.members,
+                historical: welcome.historical,
+                denied: welcome.denied,
             }
         }
         2 => NetControl::FlushEnd {
@@ -477,6 +579,11 @@ pub fn decode_net_control(bytes: &[u8]) -> Result<NetControl> {
             },
             _ => return Err(Error::InvalidInput("invalid heartbeat control length")),
         },
+        6 => NetControl::JoinRejected {
+            bound: VaultId(reader.array()?),
+            requested: VaultId(reader.array()?),
+        },
+        7 => NetControl::AdmissionDenied,
         _ => {
             return Err(Error::InvalidInput(
                 "unknown encrypted network control kind",
@@ -498,6 +605,13 @@ pub fn encode_vault_metadata(metadata: &VaultMetadata) -> Result<Vec<u8>> {
     for member in &metadata.members {
         out.extend_from_slice(&member.0);
     }
+    let mut extension = Vec::new();
+    extension.push(1);
+    push_length(&mut extension, metadata.denied.len())?;
+    for peer_id in &metadata.denied {
+        extension.extend_from_slice(&peer_id.0);
+    }
+    push_variable(&mut out, &extension)?;
     Ok(out)
 }
 
@@ -517,12 +631,34 @@ pub fn decode_vault_metadata(bytes: &[u8]) -> Result<VaultMetadata> {
         }
         members.push(member);
     }
+    let mut denied = std::collections::BTreeSet::new();
+    if reader.remaining() != 0 {
+        let extension = reader.variable()?;
+        let mut extension = Reader::new(extension);
+        if extension.byte()? != 1 {
+            return Err(Error::InvalidInput(
+                "unsupported vault metadata extension version",
+            ));
+        }
+        let denied_count = extension.count(32)?;
+        let mut previous = None;
+        for _ in 0..denied_count {
+            let peer_id = PeerId(extension.array()?);
+            if previous.is_some_and(|value| value >= peer_id) {
+                return Err(Error::InvalidInput("vault denylist is not canonical"));
+            }
+            denied.insert(peer_id);
+            previous = Some(peer_id);
+        }
+        extension.finish()?;
+    }
     reader.finish()?;
     Ok(VaultMetadata {
         vault_id,
         join_code,
         issued_at,
         members,
+        denied,
     })
 }
 
@@ -700,6 +836,22 @@ pub fn mailbox_digest(envelopes: &[MailboxEnvelope]) -> Result<[u8; 32]> {
     Ok(Sha256::digest(mailbox_wire_m(envelopes)?).into())
 }
 
+pub fn flush_transport_digest(
+    envelopes: &[MailboxEnvelope],
+    historical: &[IdentityDocument],
+) -> Result<[u8; 32]> {
+    let mailbox = mailbox_digest(envelopes)?;
+    if historical.is_empty() {
+        return Ok(mailbox);
+    }
+    let mut committed = mailbox.to_vec();
+    push_length(&mut committed, historical.len())?;
+    for document in historical {
+        push_variable(&mut committed, &encode_identity(document)?)?;
+    }
+    Ok(Sha256::digest(committed).into())
+}
+
 pub fn encode_pull_request(request: &PullRequest) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     push_length(&mut out, request.chunk_ids().len())?;
@@ -865,6 +1017,10 @@ pub fn encode_control_record(record: &ControlRecord) -> Result<Vec<u8>> {
             out.extend_from_slice(&dst_parent.0);
             push_variable(&mut out, dst_name.as_bytes())?;
         }
+        ControlUpdate::Kick(peer_id) => {
+            out.push(7);
+            out.extend_from_slice(&peer_id.0);
+        }
     }
     Ok(out)
 }
@@ -907,6 +1063,7 @@ pub fn decode_control_record(bytes: &[u8]) -> Result<ControlRecord> {
             dst_parent: FileId(reader.array()?),
             dst_name: decode_utf8_name(reader.variable()?)?,
         },
+        7 => ControlUpdate::Kick(PeerId(reader.array()?)),
         _ => return Err(Error::InvalidInput("unknown control record kind")),
     };
     reader.finish()?;
@@ -1022,6 +1179,35 @@ pub fn encode_replica(metadata: &ReplicaMetadata, generation: u64) -> Result<Vec
         body.extend_from_slice(&file_id.0);
         body.extend_from_slice(&index.to_be_bytes());
     }
+
+    let mut extension = Vec::new();
+    extension.push(1);
+    push_length(&mut extension, metadata.denied.len())?;
+    for peer_id in &metadata.denied {
+        extension.extend_from_slice(&peer_id.0);
+    }
+    match &metadata.admission {
+        Some(admission) => {
+            extension.push(1);
+            push_variable(&mut extension, &encode_vault_metadata(admission)?)?;
+        }
+        None => extension.push(0),
+    }
+    push_length(&mut extension, metadata.historical_members.len())?;
+    for peer_id in &metadata.historical_members {
+        extension.extend_from_slice(&peer_id.0);
+    }
+    push_length(&mut extension, metadata.identity_documents.len())?;
+    for (peer_id, document) in &metadata.identity_documents {
+        if document.peer_id != *peer_id {
+            return Err(Error::InvalidInput(
+                "identity document map key does not match peer id",
+            ));
+        }
+        extension.extend_from_slice(&peer_id.0);
+        push_variable(&mut extension, &encode_identity(document)?)?;
+    }
+    push_variable(&mut body, &extension)?;
 
     if body.len() > MAX_REPLICA_BYTES {
         return Err(Error::InvalidInput("replica metadata is too large"));
@@ -1202,6 +1388,60 @@ pub fn decode_replica(bytes: &[u8], expected_root: FileId) -> Result<(u64, Repli
         chunk_index.insert(chunk_id, (file_id, index));
         previous_chunk = Some(chunk_id);
     }
+    let mut denied = std::collections::BTreeSet::new();
+    let mut admission = None;
+    let mut historical_members = members.clone();
+    let mut identity_documents = std::collections::BTreeMap::new();
+    if reader.remaining() != 0 {
+        let extension = reader.variable()?;
+        let mut extension = Reader::new(extension);
+        if extension.byte()? != 1 {
+            return Err(Error::InvalidInput("unsupported replica extension version"));
+        }
+        let denied_count = extension.count(32)?;
+        let mut previous_peer = None;
+        for _ in 0..denied_count {
+            let peer_id = PeerId(extension.array()?);
+            if previous_peer.is_some_and(|previous| previous >= peer_id) {
+                return Err(Error::InvalidInput("replica denylist is not canonical"));
+            }
+            denied.insert(peer_id);
+            previous_peer = Some(peer_id);
+        }
+        admission = match extension.byte()? {
+            0 => None,
+            1 => Some(decode_vault_metadata(extension.variable()?)?),
+            _ => return Err(Error::InvalidInput("invalid replica admission flag")),
+        };
+        let historical_count = extension.count(32)?;
+        historical_members.clear();
+        previous_peer = None;
+        for _ in 0..historical_count {
+            let peer_id = PeerId(extension.array()?);
+            if previous_peer.is_some_and(|previous| previous >= peer_id) {
+                return Err(Error::InvalidInput("historical members are not canonical"));
+            }
+            historical_members.insert(peer_id);
+            previous_peer = Some(peer_id);
+        }
+        let document_count = extension.count(36)?;
+        previous_peer = None;
+        for _ in 0..document_count {
+            let peer_id = PeerId(extension.array()?);
+            if previous_peer.is_some_and(|previous| previous >= peer_id) {
+                return Err(Error::InvalidInput("identity documents are not canonical"));
+            }
+            let document = decode_identity(extension.variable()?)?;
+            if document.peer_id != peer_id {
+                return Err(Error::InvalidInput(
+                    "identity document map key does not match peer id",
+                ));
+            }
+            identity_documents.insert(peer_id, document);
+            previous_peer = Some(peer_id);
+        }
+        extension.finish()?;
+    }
     reader.finish()?;
 
     Ok((
@@ -1216,8 +1456,80 @@ pub fn decode_replica(bytes: &[u8], expected_root: FileId) -> Result<(u64, Repli
             mailboxes,
             acked_through,
             chunk_index,
+            denied,
+            admission,
+            historical_members,
+            identity_documents,
         },
     ))
+}
+
+pub(crate) fn encode_admission_transaction(
+    old_replica: &[u8],
+    old_admission: &[u8],
+) -> Result<Vec<u8>> {
+    if old_replica.len() > MAX_REPLICA_BYTES || old_admission.len() > MAX_VAULT_METADATA_BYTES {
+        return Err(Error::InvalidInput(
+            "admission transaction field is too large",
+        ));
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(ADMISSION_TRANSACTION_MAGIC);
+    out.push(LOCAL_FORMAT_VERSION);
+    push_variable(&mut out, old_replica)?;
+    push_variable(&mut out, old_admission)?;
+    let digest = Sha256::digest(&out);
+    out.extend_from_slice(&digest);
+    Ok(out)
+}
+
+pub(crate) fn decode_admission_transaction(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    const HASH_LEN: usize = 32;
+    let maximum = ADMISSION_TRANSACTION_MAGIC.len()
+        + 1
+        + 4
+        + MAX_REPLICA_BYTES
+        + 4
+        + MAX_VAULT_METADATA_BYTES
+        + HASH_LEN;
+    if bytes.len() > maximum || bytes.len() < ADMISSION_TRANSACTION_MAGIC.len() + 1 + 8 + HASH_LEN {
+        return Err(Error::InvalidInput("invalid admission transaction length"));
+    }
+    let content_len = bytes.len() - HASH_LEN;
+    if Sha256::digest(&bytes[..content_len])[..] != bytes[content_len..] {
+        return Err(Error::AuthenticationFailed);
+    }
+    let mut reader = Reader::new(&bytes[..content_len]);
+    reader.require_prefix(ADMISSION_TRANSACTION_MAGIC)?;
+    reader.require_version()?;
+    let old_replica = reader.variable()?;
+    let old_admission = reader.variable()?;
+    if old_replica.len() > MAX_REPLICA_BYTES || old_admission.len() > MAX_VAULT_METADATA_BYTES {
+        return Err(Error::InvalidInput(
+            "admission transaction field is too large",
+        ));
+    }
+    reader.finish()?;
+    Ok((old_replica.to_vec(), old_admission.to_vec()))
+}
+
+pub(crate) fn encode_vault_migration(vault_id: VaultId, phase: u8) -> Result<Vec<u8>> {
+    if phase > 3 {
+        return Err(Error::InvalidInput("invalid vault migration phase"));
+    }
+    let mut bytes = Vec::with_capacity(33);
+    bytes.extend_from_slice(&vault_id.0);
+    bytes.push(phase);
+    Ok(bytes)
+}
+
+pub(crate) fn decode_vault_migration(bytes: &[u8]) -> Result<(VaultId, u8)> {
+    if bytes.len() != 33 || bytes[32] > 3 {
+        return Err(Error::InvalidInput("invalid vault migration marker"));
+    }
+    let mut vault_id = [0; 32];
+    vault_id.copy_from_slice(&bytes[..32]);
+    Ok((VaultId(vault_id), bytes[32]))
 }
 
 pub fn flush_m(challenge: &FlushChallenge) -> [u8; 32] {
@@ -1683,6 +1995,7 @@ mod persistence_tests {
     fn replica_round_trip_preserves_metadata_without_plaintext_or_ciphertext() {
         let root = FileId([0x10; 32]);
         let member = PeerId([0x20; 32]);
+        let denied = PeerId([0x21; 32]);
         let file_id = FileId([0x30; 32]);
         let chunk_id = ChunkId([0x40; 32]);
         let record = ControlRecord {
@@ -1698,11 +2011,73 @@ mod persistence_tests {
             .insert(member, vec![QueueContent::Control(record)]);
         metadata.acked_through.insert(member, 0);
         metadata.chunk_index.insert(chunk_id, (file_id, 7));
+        metadata.denied.insert(denied);
+        metadata.historical_members.extend([member, denied]);
+        let historical_identity = must_ok(LocalIdentity::generate()).document;
+        metadata
+            .historical_members
+            .insert(historical_identity.peer_id);
+        metadata
+            .identity_documents
+            .insert(historical_identity.peer_id, historical_identity);
+        metadata.admission = Some(VaultMetadata {
+            vault_id: VaultId(root.0),
+            join_code: JoinCode([0x22; 16]),
+            issued_at: 8,
+            members: vec![member],
+            denied: [denied].into_iter().collect(),
+        });
 
         let encoded = must_ok(encode_replica(&metadata, 9));
         let (generation, decoded) = must_ok(decode_replica(&encoded, root));
         assert_eq!(generation, 9);
         assert!(decoded == metadata);
+    }
+
+    #[test]
+    fn replica_legacy_body_defaults_history_to_live_members() {
+        let root = FileId([0x41; 32]);
+        let member = PeerId([0x42; 32]);
+        let mut metadata = ReplicaMetadata::new(root);
+        metadata.members.insert(member);
+        let encoded = must_ok(encode_replica(&metadata, 3));
+        let header_len = REPLICA_MAGIC.len() + 1 + 8 + 4;
+        let body_len_offset = REPLICA_MAGIC.len() + 1 + 8;
+        let body_len = u32::from_be_bytes(
+            encoded[body_len_offset..body_len_offset + 4]
+                .try_into()
+                .unwrap_or_else(|_| panic!("body length slice must be four bytes")),
+        ) as usize;
+        let extension_len = 4 + 1 + 4 + 1 + 4 + 4;
+        let legacy_body_len = body_len - extension_len;
+        let mut legacy = encoded[..header_len + legacy_body_len].to_vec();
+        legacy[body_len_offset..body_len_offset + 4]
+            .copy_from_slice(&(legacy_body_len as u32).to_be_bytes());
+        let digest = Sha256::digest(&legacy);
+        legacy.extend_from_slice(&digest);
+
+        let (_, decoded) = must_ok(decode_replica(&legacy, root));
+        assert!(decoded.historical_members == metadata.members);
+        assert!(decoded.denied.is_empty());
+        assert!(decoded.admission.is_none());
+        assert!(decoded.identity_documents.is_empty());
+    }
+
+    #[test]
+    fn admission_transaction_round_trip_rejects_damage_and_trailing_bytes() {
+        let encoded = must_ok(encode_admission_transaction(&[1, 2, 3], &[4, 5]));
+        let decoded = must_ok(decode_admission_transaction(&encoded));
+        assert!(decoded == (vec![1, 2, 3], vec![4, 5]));
+
+        let mut damaged = encoded.clone();
+        damaged[ADMISSION_TRANSACTION_MAGIC.len() + 1 + 4] ^= 1;
+        assert!(matches!(
+            decode_admission_transaction(&damaged),
+            Err(Error::AuthenticationFailed)
+        ));
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(decode_admission_transaction(&trailing).is_err());
     }
 
     #[test]
@@ -1722,6 +2097,75 @@ mod persistence_tests {
             decode_replica(&encoded, FileId([0x52; 32])),
             Err(Error::State(_))
         ));
+    }
+
+    #[test]
+    fn vault_metadata_reads_legacy_and_rejects_bad_extensions() {
+        let metadata = VaultMetadata {
+            vault_id: VaultId([0x61; 32]),
+            join_code: JoinCode([0x62; 16]),
+            issued_at: 7,
+            members: vec![PeerId([0x63; 32])],
+            denied: [PeerId([0x64; 32])].into_iter().collect(),
+        };
+        let encoded = must_ok(encode_vault_metadata(&metadata));
+        let legacy_len = VAULT_METADATA_MAGIC.len() + 1 + 32 + 16 + 8 + 4 + 32;
+        let legacy = &encoded[..legacy_len];
+        let decoded = must_ok(decode_vault_metadata(legacy));
+        assert!(decoded.members == metadata.members);
+        assert!(decoded.denied.is_empty());
+
+        let mut bad_version = encoded.clone();
+        bad_version[legacy_len + 4] = 2;
+        assert!(decode_vault_metadata(&bad_version).is_err());
+
+        let mut trailing_extension = encoded;
+        let extension_len = u32::from_be_bytes(
+            trailing_extension[legacy_len..legacy_len + 4]
+                .try_into()
+                .unwrap_or_else(|_| panic!("extension length slice must be four bytes")),
+        );
+        trailing_extension[legacy_len..legacy_len + 4]
+            .copy_from_slice(&(extension_len + 1).to_be_bytes());
+        trailing_extension.push(0);
+        assert!(decode_vault_metadata(&trailing_extension).is_err());
+    }
+
+    #[test]
+    fn replica_rejects_bad_extension_version_and_trailing_extension_data() {
+        fn replace_replica_digest(bytes: &mut Vec<u8>) {
+            bytes.truncate(bytes.len() - 32);
+            let digest = Sha256::digest(&*bytes);
+            bytes.extend_from_slice(&digest);
+        }
+
+        let root = FileId([0x65; 32]);
+        let encoded = must_ok(encode_replica(&ReplicaMetadata::new(root), 1));
+        let body_len_offset = REPLICA_MAGIC.len() + 1 + 8;
+        let header_len = body_len_offset + 4;
+        let body_len = u32::from_be_bytes(
+            encoded[body_len_offset..body_len_offset + 4]
+                .try_into()
+                .unwrap_or_else(|_| panic!("body length slice must be four bytes")),
+        ) as usize;
+        let extension_content_len = 1 + 4 + 1 + 4 + 4;
+        let extension_version_offset = header_len + body_len - extension_content_len;
+
+        let mut bad_version = encoded.clone();
+        bad_version[extension_version_offset] = 2;
+        replace_replica_digest(&mut bad_version);
+        assert!(decode_replica(&bad_version, root).is_err());
+
+        let mut trailing_extension = encoded;
+        let hash_start = trailing_extension.len() - 32;
+        trailing_extension.insert(hash_start, 0);
+        trailing_extension[body_len_offset..body_len_offset + 4]
+            .copy_from_slice(&((body_len + 1) as u32).to_be_bytes());
+        let extension_len_offset = extension_version_offset - 4;
+        trailing_extension[extension_len_offset..extension_len_offset + 4]
+            .copy_from_slice(&((extension_content_len + 1) as u32).to_be_bytes());
+        replace_replica_digest(&mut trailing_extension);
+        assert!(decode_replica(&trailing_extension, root).is_err());
     }
 
     #[test]

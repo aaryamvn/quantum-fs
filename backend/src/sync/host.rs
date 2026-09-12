@@ -1,9 +1,12 @@
+mod eviction;
 mod filesystem;
+mod membership;
 mod persistence;
+use persistence::verify_record_manifest;
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -11,11 +14,13 @@ use std::{
 use crate::{
     crypto::{
         aead::{Aes256Gcm, RustCryptoAes256Gcm},
+        identity::IdentityDocument,
         sign::{PureMlDsa, RustCryptoPureMlDsa, FLUSH_CONTEXT},
     },
     encoding::{self, MailboxFrame},
     ids::{ChunkId, Epoch, FileId, PeerId, Seq},
     keystore::{random_bytes, IdentityKeyStore, KeyStore},
+    net::{join::VaultMetadata, JoinCode},
     protocol::{
         manifest::{Manifest, TrustedManifest},
         packet::{ControlPacket, PacketHeader, PayloadType, PROTOCOL_VERSION},
@@ -55,6 +60,7 @@ pub struct FlushChallenge(pub [u8; 32]);
 pub enum ControlUpdate {
     NewManifest(Manifest),
     Add(FileId),
+    Kick(PeerId),
     Clear(FileId),
     Remove(FileId),
     Link {
@@ -113,6 +119,9 @@ pub struct HostState {
     acked_through: BTreeMap<PeerId, u64>,
     host_id: PeerId,
     members: BTreeSet<PeerId>,
+    denied: BTreeSet<PeerId>,
+    historical_members: BTreeSet<PeerId>,
+    identity_documents: BTreeMap<PeerId, IdentityDocument>,
     chunks: SharedChunkStore,
     manifests: BTreeMap<FileId, TrustedManifest>,
     log: Vec<ControlRecord>,
@@ -120,6 +129,7 @@ pub struct HostState {
     mailboxes: BTreeMap<PeerId, VecDeque<Queued>>,
     online: BTreeMap<PeerId, Vec<OnlineControl>>,
     gate_owner: u64,
+    admission: Option<VaultMetadata>,
 }
 
 /// Compromising H compromises all shared plaintext; H is TCB for all shared files.
@@ -131,6 +141,8 @@ pub struct HostService {
     challenges: BTreeMap<PeerId, FlushChallenge>,
     running: bool,
     defer_persistence: bool,
+    admission_path: Option<PathBuf>,
+    disconnects: Vec<PeerId>,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -165,6 +177,9 @@ pub struct MemberReplica {
     keys: KeyStore,
     host_id: PeerId,
     members: BTreeSet<PeerId>,
+    denied: BTreeSet<PeerId>,
+    historical_members: BTreeSet<PeerId>,
+    identity_documents: BTreeMap<PeerId, IdentityDocument>,
     chunks: SharedChunkStore,
     manifests: BTreeMap<FileId, TrustedManifest>,
     controls: BTreeMap<u64, ControlRecord>,
@@ -187,6 +202,10 @@ enum Opened {
 }
 
 struct StagedReplica {
+    members: BTreeSet<PeerId>,
+    denied: BTreeSet<PeerId>,
+    historical_members: BTreeSet<PeerId>,
+    identity_documents: BTreeMap<PeerId, IdentityDocument>,
     tree: DirectoryTree,
     chunks: MemoryChunkStore,
     manifests: BTreeMap<FileId, TrustedManifest>,
@@ -218,6 +237,9 @@ impl HostService {
                 tree: DirectoryTree::new(FileId([0; 32])),
                 acked_through: BTreeMap::new(),
                 host_id,
+                historical_members: members.clone(),
+                identity_documents: BTreeMap::new(),
+                denied: BTreeSet::new(),
                 members,
                 chunks,
                 manifests: BTreeMap::new(),
@@ -226,11 +248,14 @@ impl HostService {
                 mailboxes: BTreeMap::new(),
                 online: BTreeMap::new(),
                 gate_owner: u64::from_be_bytes(random_bytes()?),
+                admission: None,
             },
             presence: BTreeMap::new(),
             challenges: BTreeMap::new(),
             running: true,
             defer_persistence: false,
+            admission_path: None,
+            disconnects: Vec::new(),
         })
     }
 
@@ -245,6 +270,8 @@ impl HostService {
             challenges: BTreeMap::new(),
             running: true,
             defer_persistence: false,
+            admission_path: None,
+            disconnects: Vec::new(),
         };
         // Undelivered live controls become queued catch-up on a replacement host.
         let pending = std::mem::take(&mut host.state.online);
@@ -297,8 +324,13 @@ impl HostService {
         self.require_running()?;
         document.verify()?;
         let peer_id = document.peer_id;
-        self.keys.import_peer(document)?;
+        if self.state.denied.contains(&peer_id) {
+            return Err(Error::AuthenticationFailed);
+        }
+        self.keys.import_peer(document.clone())?;
         let mut staged = self.stage_state()?;
+        staged.identity_documents.insert(peer_id, document);
+        staged.historical_members.insert(peer_id);
         staged.members.insert(peer_id);
         self.publish_state(staged)
     }
@@ -362,6 +394,7 @@ impl HostService {
     fn commit_instruction(&mut self, update: ControlUpdate) -> Result<()> {
         match update {
             ControlUpdate::NewManifest(manifest) => self.commit(manifest),
+            ControlUpdate::Kick(target) => self.kick(target).map(|_| ()),
             update => {
                 self.require_running()?;
                 self.commit_verified(update, None)
@@ -395,6 +428,11 @@ impl HostService {
         update: ControlUpdate,
         trusted: Option<TrustedManifest>,
     ) -> Result<()> {
+        let kicked = if let ControlUpdate::Kick(target) = &update {
+            Some(*target)
+        } else {
+            None
+        };
         filesystem::validate_link_kind(&self.state.manifests, &update)?;
         let (tree, removed_file) = filesystem::apply_tree_update(&self.state.tree, &update)?;
         self.refresh_mailboxes()?;
@@ -413,7 +451,7 @@ impl HostService {
             .members
             .iter()
             .copied()
-            .filter(|id| *id != self.state.host_id)
+            .filter(|id| *id != self.state.host_id && Some(*id) != kicked)
             .collect();
         // Resolve every pair before any queue mutation or plaintext application.
         for &peer in &recipients {
@@ -558,6 +596,25 @@ impl HostService {
             }
             staged.mailboxes = queues;
             staged.online = online;
+            if let Some(target) = kicked {
+                staged.members.remove(&target);
+                staged.acked_through.remove(&target);
+                staged.mailboxes.remove(&target);
+                staged.online.remove(&target);
+                staged.denied.insert(target);
+                if let Some(admission) = &mut staged.admission {
+                    admission.join_code = JoinCode::generate()?;
+                    let next_ad = unix_time()?.max(
+                        admission
+                            .issued_at
+                            .checked_add(1)
+                            .ok_or(Error::State("ad timestamp exhausted"))?,
+                    );
+                    admission.issued_at = next_ad
+                        .checked_add(1)
+                        .ok_or(Error::State("ad timestamp exhausted"))?;
+                }
+            }
             staged.acked_through.insert(staged.host_id, record.id);
             staged.log.push(record);
             staged.next_control = next;
@@ -584,6 +641,9 @@ impl HostService {
         self.require_member(recipient)?;
         self.keys.require_live_traffic(recipient)?;
         let session = self.keys.current_session(recipient)?;
+        if self.state.online.get(&recipient).is_none_or(Vec::is_empty) {
+            return Ok(Vec::new());
+        }
         if let Some(pending) = self.state.online.get_mut(&recipient) {
             for old in pending {
                 if old.packet.header.epoch != session.epoch {
@@ -835,7 +895,10 @@ impl HostService {
         recipient
             .keys
             .block_live_traffic(self.state.host_id, self.state.gate_owner)?;
-        let report = recipient.apply_mailbox(prepared.envelopes())?;
+        let staged = recipient
+            .prepare_mailbox_with_history(prepared.envelopes(), &self.historical_documents())?;
+        let report = recipient.commit_prepared(staged)?;
+        recipient.finish_receipts();
         self.acknowledge_flush(peer, prepared)?;
         recipient
             .keys
@@ -864,6 +927,9 @@ impl MemberReplica {
         Ok(Self {
             keys,
             host_id,
+            historical_members: members.clone(),
+            identity_documents: BTreeMap::new(),
+            denied: BTreeSet::new(),
             members,
             chunks,
             manifests: BTreeMap::new(),
@@ -895,22 +961,20 @@ impl MemberReplica {
         if !members.contains(&self.host_id) || !members.contains(&self.keys.peer_id()?) {
             return Err(Error::AuthenticationFailed);
         }
-        let mut next = self.members.clone();
-        next.extend(members.iter().copied());
         let mut staged = self.stage()?;
-        let mut metadata = self.metadata_for(&staged)?;
-        metadata.members = next.clone();
-        staged.chunks.persist_metadata(metadata)?;
-        *self
-            .chunks
-            .lock()
-            .map_err(|_| Error::State("chunk store poisoned"))? = staged.chunks;
-        self.members = next;
-        Ok(())
+        staged
+            .members
+            .extend(members.difference(&staged.denied).copied());
+        staged.historical_members.extend(members.iter().copied());
+        self.apply_staged(staged)
     }
 
     fn stage(&self) -> Result<StagedReplica> {
         Ok(StagedReplica {
+            members: self.members.clone(),
+            denied: self.denied.clone(),
+            historical_members: self.historical_members.clone(),
+            identity_documents: self.identity_documents.clone(),
             tree: self.tree.clone(),
             chunks: self
                 .chunks
@@ -923,6 +987,7 @@ impl MemberReplica {
         })
     }
     fn apply_staged(&mut self, mut staged: StagedReplica) -> Result<()> {
+        membership::archive_replica(&self.keys, &mut staged)?;
         let metadata = self.metadata_for(&staged)?;
         staged.chunks.persist_metadata(metadata)?;
         let last = staged
@@ -933,11 +998,19 @@ impl MemberReplica {
             .chunks
             .lock()
             .map_err(|_| Error::State("chunk store poisoned"))? = staged.chunks;
+        let kicked: Vec<_> = staged.denied.difference(&self.denied).copied().collect();
+        self.members = staged.members;
+        self.denied = staged.denied;
+        self.historical_members = staged.historical_members;
+        self.identity_documents = staged.identity_documents;
         self.tree = staged.tree;
         self.manifests = staged.manifests;
         self.controls = staged.controls;
         self.log = staged.log;
         self.last_applied = last;
+        for peer in kicked {
+            self.keys.discard_pair(peer)?;
+        }
         Ok(())
     }
     fn stage_control(&self, staged: &mut StagedReplica, record: &ControlRecord) -> Result<bool> {
@@ -958,8 +1031,26 @@ impl MemberReplica {
         filesystem::validate_link_kind(&staged.manifests, &record.update)?;
         let (tree, removed_file) = filesystem::apply_tree_update(&staged.tree, &record.update)?;
         if let ControlUpdate::NewManifest(manifest) = &record.update {
-            let trusted = TrustedManifest::verify(manifest.clone(), &self.keys, &self.members)?;
+            // H's authenticated history supplies admissions before the retained
+            // record; a later Kick removes the writer from the running set.
+            if !staged.denied.contains(&manifest.writer_id)
+                && staged.historical_members.contains(&manifest.writer_id)
+            {
+                staged.members.insert(manifest.writer_id);
+            }
+            let trusted = verify_record_manifest(
+                manifest.clone(),
+                &self.keys,
+                &staged.members,
+                &staged.identity_documents,
+            )?;
             staged.manifests.insert(trusted.manifest().file_id, trusted);
+        }
+        if let ControlUpdate::Kick(target) = &record.update {
+            if *target == self.host_id || !staged.members.remove(target) {
+                return Err(Error::AuthenticationFailed);
+            }
+            staged.denied.insert(*target);
         }
         if let Some(file_id) = removed_file {
             staged.chunks.remove_file(&file_id);
@@ -1005,8 +1096,26 @@ impl MemberReplica {
         &mut self,
         envelopes: &[MailboxEnvelope],
     ) -> Result<PreparedReplicaFlush> {
+        self.prepare_mailbox_with_history(envelopes, &[])
+    }
+
+    /// Public identity history is staged, never published before the transport
+    /// authenticates the entire batch and calls commit_prepared. This lets an
+    /// offline member verify writers admitted after its last applied record.
+    pub fn prepare_mailbox_with_history(
+        &mut self,
+        envelopes: &[MailboxEnvelope],
+        history: &[IdentityDocument],
+    ) -> Result<PreparedReplicaFlush> {
         self.receipts.retain(|(prior, _)| envelopes.contains(prior));
         let mut staged = self.stage()?;
+        for document in history {
+            document.verify()?;
+            staged.historical_members.insert(document.peer_id);
+            staged
+                .identity_documents
+                .insert(document.peer_id, document.clone());
+        }
         let mut report = FlushReport::default();
         let session = self.keys.current_session(self.host_id)?;
         let mut last_packet = None;
@@ -1076,6 +1185,12 @@ impl MemberReplica {
                     }
                 }
             };
+            // Cache authenticated plaintext before dependency validation. A
+            // damaged public history offer can omit a writer; retry with the
+            // authentic offer must not reopen an already accepted GCM counter.
+            if !self.receipts.iter().any(|(prior, _)| prior == envelope) {
+                self.receipts.push((envelope.clone(), opened.clone()));
+            }
             match &opened {
                 Opened::Control(record) => {
                     if self.stage_control(&mut staged, record)? {
@@ -1100,9 +1215,6 @@ impl MemberReplica {
                     }
                     bodies.push((*file_id, *index, plaintext.clone()));
                 }
-            }
-            if !self.receipts.iter().any(|(prior, _)| prior == envelope) {
-                self.receipts.push((envelope.clone(), opened));
             }
         }
         // All instructions apply before any body reaches the actual replica.
@@ -1147,13 +1259,6 @@ impl MemberReplica {
 
     pub fn finish_receipts(&mut self) {
         self.receipts.clear();
-    }
-
-    fn apply_mailbox(&mut self, envelopes: &[MailboxEnvelope]) -> Result<FlushReport> {
-        let prepared = self.prepare_mailbox(envelopes)?;
-        let report = self.commit_prepared(prepared)?;
-        self.finish_receipts();
-        Ok(report)
     }
 }
 

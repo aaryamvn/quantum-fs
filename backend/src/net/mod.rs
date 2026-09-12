@@ -8,6 +8,7 @@ pub mod frame;
 pub mod join;
 pub mod locate;
 pub mod session;
+pub mod vaults;
 
 const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 

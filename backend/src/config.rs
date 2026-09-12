@@ -32,6 +32,7 @@ pub struct Config {
         conflicts_with = "create_vault"
     )]
     pub join_code: Option<crate::net::JoinCode>,
+    /// Add a vault and serve it alongside every existing hosted vault.
     #[arg(long, requires = "directory_addr")]
     pub create_vault: bool,
     /// Numeric address advertised after bind (for NAT/container forwarding).

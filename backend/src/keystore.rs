@@ -82,7 +82,33 @@ impl KeyStore {
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        if fs::canonicalize(identity_parent)? != fs::canonicalize(data_dir)? {
+        let lock_root = fs::canonicalize(identity_parent)?;
+        let candidate = fs::canonicalize(data_dir)?;
+        if candidate == lock_root {
+            return Ok(());
+        }
+        let name =
+            data_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or(Error::InvalidInput(
+                    "replica data directory differs from keystore lock directory",
+                ))?;
+        let is_vault_id = name.len() == 64
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        let lexical_parent = data_dir.parent();
+        let is_vault_path = is_vault_id
+            && lexical_parent
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                == Some("vaults")
+            && lexical_parent
+                .and_then(Path::parent)
+                .is_some_and(|root| fs::canonicalize(root).ok().as_ref() == Some(&lock_root))
+            && candidate.starts_with(&lock_root);
+        if !is_vault_path {
             return Err(Error::InvalidInput(
                 "replica data directory differs from keystore lock directory",
             ));
@@ -643,7 +669,11 @@ pub(crate) fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
 }
 
 pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    if bytes.len() as u64 > MAX_STORE_BYTES {
+    atomic_private_write_bounded(path, bytes, MAX_STORE_BYTES)
+}
+
+pub(crate) fn atomic_private_write_bounded(path: &Path, bytes: &[u8], maximum: u64) -> Result<()> {
+    if bytes.len() as u64 > maximum {
         return Err(Error::InvalidInput("keystore file is too large"));
     }
     let temporary = sibling(

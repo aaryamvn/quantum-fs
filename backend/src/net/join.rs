@@ -50,12 +50,15 @@ impl JoinRequest {
 pub struct NetWelcome {
     pub vault_id: VaultId,
     pub members: Vec<IdentityDocument>,
+    pub historical: Vec<IdentityDocument>,
+    pub denied: BTreeSet<PeerId>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct FlushOffer {
     pub challenge: crate::sync::host::FlushChallenge,
     pub frame_count: u32,
+    pub historical: Vec<IdentityDocument>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -63,7 +66,14 @@ pub enum NetControl {
     JoinAccepted {
         vault_id: VaultId,
         members: Vec<IdentityDocument>,
+        historical: Vec<IdentityDocument>,
+        denied: BTreeSet<PeerId>,
     },
+    JoinRejected {
+        bound: VaultId,
+        requested: VaultId,
+    },
+    AdmissionDenied,
     FlushEnd {
         digest: [u8; 32],
     },
@@ -77,12 +87,13 @@ pub enum NetControl {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VaultMetadata {
     pub vault_id: VaultId,
     pub join_code: JoinCode,
     pub issued_at: u64,
     pub members: Vec<crate::ids::PeerId>,
+    pub denied: BTreeSet<PeerId>,
 }
 
 use super::{
@@ -111,7 +122,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::Path,
     rc::Rc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -119,6 +130,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(5);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 pub const MAX_CONNECTIONS: usize = 128;
 pub const MAX_PROVISIONAL: usize = 32;
 const MAX_DRAIN_BYTES: usize = 64 * 1024 * 1024;
@@ -136,8 +148,6 @@ pub fn unix_time() -> Result<u64> {
 pub struct VaultHost {
     pub keys: KeyStore,
     pub host: HostService,
-    metadata: VaultMetadata,
-    path: PathBuf,
     active_peers: BTreeSet<PeerId>,
 }
 
@@ -150,55 +160,72 @@ impl VaultHost {
                 join_code: JoinCode::generate()?,
                 issued_at: 0,
                 members: vec![keys.peer_id()?],
+                denied: BTreeSet::new(),
             },
         };
         let members: BTreeSet<_> = metadata.members.iter().copied().collect();
-        let host = HostService::new_in_vault(
+        let mut host = HostService::new_in_vault(
             keys.clone(),
             members,
             shared_chunk_store(),
             FileId(metadata.vault_id.0),
         )?;
+        host.attach_admission(path, metadata)?;
         let vault = Self {
             keys,
             host,
-            metadata,
-            path: path.to_owned(),
             active_peers: BTreeSet::new(),
         };
-        vault.persist()?;
         Ok(vault)
     }
     pub fn open_durable(keys: KeyStore, path: &Path, data_dir: &Path) -> Result<Self> {
-        let mut vault = Self::load_or_create(keys.clone(), path)?;
-        vault.host = HostService::open_durable(
-            keys,
+        crate::store::transaction::recover_admission_transaction(path)?;
+        let metadata = match crate::keystore::read_private(path)? {
+            Some(bytes) => encoding::decode_vault_metadata(&bytes)?,
+            None => VaultMetadata {
+                vault_id: VaultId::generate()?,
+                join_code: JoinCode::generate()?,
+                issued_at: 0,
+                members: vec![keys.peer_id()?],
+                denied: BTreeSet::new(),
+            },
+        };
+        let mut host = HostService::open_durable(
+            keys.clone(),
             data_dir,
-            crate::ids::FileId(vault.metadata.vault_id.0),
-            vault.metadata.members.iter().copied().collect(),
+            crate::ids::FileId(metadata.vault_id.0),
+            metadata.members.iter().copied().collect(),
         )?;
-        // replica.bin is authoritative for admitted membership. The small vault
-        // file continues to hold only admission metadata and a compatibility list.
-        vault.metadata.members = vault.host.members().iter().copied().collect();
-        vault.persist()?;
-        Ok(vault)
+        host.attach_admission(path, metadata)?;
+        Ok(Self {
+            keys,
+            host,
+            active_peers: BTreeSet::new(),
+        })
     }
     pub fn resume(keys: KeyStore, path: &Path, state: HostState) -> Result<Self> {
-        let mut vault = Self::load_or_create(keys.clone(), path)?;
-        vault.host = HostService::resume(keys, state)?;
-        Ok(vault)
+        let metadata = match crate::keystore::read_private(path)? {
+            Some(bytes) => encoding::decode_vault_metadata(&bytes)?,
+            None => return Err(Error::State("vault admission metadata is missing")),
+        };
+        let mut host = HostService::resume(keys.clone(), state)?;
+        host.attach_admission(path, metadata)?;
+        Ok(Self {
+            keys,
+            host,
+            active_peers: BTreeSet::new(),
+        })
     }
     pub fn vault_id(&self) -> VaultId {
-        self.metadata.vault_id
+        self.admission().vault_id
     }
     pub fn join_code(&self) -> JoinCode {
-        self.metadata.join_code
+        self.admission().join_code
     }
-    fn persist(&self) -> Result<()> {
-        crate::keystore::atomic_private_write(
-            &self.path,
-            &encoding::encode_vault_metadata(&self.metadata)?,
-        )
+    fn admission(&self) -> &VaultMetadata {
+        self.host
+            .admission()
+            .expect("VaultHost always attaches admission metadata")
     }
     pub async fn publish(
         &mut self,
@@ -206,15 +233,16 @@ impl VaultHost {
         addr: SocketAddr,
     ) -> Result<DirectoryAd> {
         let issued_at = unix_time()?.max(
-            self.metadata
+            self.admission()
                 .issued_at
                 .checked_add(1)
                 .ok_or(Error::State("ad timestamp exhausted"))?,
         );
-        let ad = DirectoryAd::sign(&self.keys, self.metadata.vault_id, addr, issued_at)?;
-        directory.put(self.metadata.join_code, &ad).await?;
-        self.metadata.issued_at = issued_at;
-        self.persist()?;
+        let mut metadata = self.admission().clone();
+        let ad = DirectoryAd::sign(&self.keys, metadata.vault_id, addr, issued_at)?;
+        directory.put(metadata.join_code, &ad).await?;
+        metadata.issued_at = issued_at;
+        self.host.set_admission(metadata)?;
         Ok(ad)
     }
     pub async fn rotate_code(
@@ -224,11 +252,11 @@ impl VaultHost {
     ) -> Result<JoinCode> {
         let (code, ad, forget) = {
             let mut state = vault.borrow_mut();
-            let old = state.metadata.join_code;
+            let old = state.admission().join_code;
             let code = JoinCode::generate()?;
             let issued_at = unix_time()?.max(
                 state
-                    .metadata
+                    .admission()
                     .issued_at
                     .checked_add(1)
                     .ok_or(Error::State("ad timestamp exhausted"))?,
@@ -236,13 +264,14 @@ impl VaultHost {
             let forgotten_at = issued_at
                 .checked_add(1)
                 .ok_or(Error::State("ad timestamp exhausted"))?;
-            let ad = DirectoryAd::sign(&state.keys, state.metadata.vault_id, addr, issued_at)?;
-            let forget = DirForget::sign(&state.keys, state.metadata.vault_id, old, forgotten_at)?;
-            state.metadata.join_code = code;
-            state.metadata.issued_at = forgotten_at;
+            let mut metadata = state.admission().clone();
+            let ad = DirectoryAd::sign(&state.keys, metadata.vault_id, addr, issued_at)?;
+            let forget = DirForget::sign(&state.keys, metadata.vault_id, old, forgotten_at)?;
+            metadata.join_code = code;
+            metadata.issued_at = forgotten_at;
             // Admission changes before directory I/O; the borrow is released so
             // concurrent connections observe the new code immediately.
-            state.persist()?;
+            state.host.set_admission(metadata)?;
             (code, ad, forget)
         };
         directory.put(code, &ad).await?;
@@ -251,24 +280,16 @@ impl VaultHost {
     }
     fn admit(&mut self, request: &JoinRequest, peer: &IdentityDocument) -> Result<()> {
         request.verify(peer)?;
-        if request.vault_id != self.metadata.vault_id
-            || request.join_code != self.metadata.join_code
+        if request.vault_id != self.admission().vault_id
+            || request.join_code != self.admission().join_code
+            || self.host.denied().contains(&peer.peer_id)
         {
             return Err(Error::AuthenticationFailed);
         }
         if !self.host.is_running() {
             return Err(Error::State("host is not running"));
         }
-        let mut metadata = self.metadata.clone();
-        if !metadata.members.contains(&peer.peer_id) {
-            metadata.members.push(peer.peer_id);
-        }
-        crate::keystore::atomic_private_write(
-            &self.path,
-            &encoding::encode_vault_metadata(&metadata)?,
-        )?;
         self.host.add_member(peer.clone())?;
-        self.metadata = metadata;
         Ok(())
     }
     fn welcome(&self) -> Result<NetControl> {
@@ -281,9 +302,39 @@ impl VaultHost {
             });
         }
         Ok(NetControl::JoinAccepted {
-            vault_id: self.metadata.vault_id,
+            vault_id: self.admission().vault_id,
             members,
+            historical: self.host.historical_documents(),
+            denied: self.host.denied().clone(),
         })
+    }
+
+    pub async fn kick(
+        vault: &Rc<RefCell<Self>>,
+        directory: &DirectoryClient,
+        addr: SocketAddr,
+        target: PeerId,
+    ) -> Result<PeerId> {
+        let (kicked, code, ad, forget) = {
+            let mut state = vault.borrow_mut();
+            let old = state.join_code();
+            let kicked = state.host.kick(target)?;
+            let metadata = state.admission().clone();
+            let forgotten_at = metadata.issued_at;
+            let issued_at = forgotten_at
+                .checked_sub(1)
+                .ok_or(Error::State("ad timestamp is not reserved"))?;
+            let ad = DirectoryAd::sign(&state.keys, metadata.vault_id, addr, issued_at)?;
+            let forget = DirForget::sign(&state.keys, metadata.vault_id, old, forgotten_at)?;
+            (kicked, metadata.join_code, ad, forget)
+        };
+        directory.put(code, &ad).await?;
+        directory.forget(&forget).await?;
+        Ok(kicked)
+    }
+
+    pub fn take_disconnects(&mut self) -> Vec<PeerId> {
+        self.host.take_disconnects()
     }
 }
 
@@ -305,6 +356,8 @@ impl Drop for CounterPermit {
 
 struct PeerPermit {
     vault: Rc<RefCell<VaultHost>>,
+    vaults: crate::net::vaults::VaultSet,
+    vault_id: VaultId,
     peer: PeerId,
 }
 impl Drop for PeerPermit {
@@ -313,61 +366,148 @@ impl Drop for PeerPermit {
             vault.active_peers.remove(&self.peer);
             let _ = vault.host.heartbeat(self.peer, Duration::ZERO);
         }
+        if self.vault.borrow().keys.current_session(self.peer).is_err() {
+            self.vaults.unbind(self.peer, self.vault_id);
+        }
     }
 }
 
-pub async fn serve_host(listener: TcpListener, vault: Rc<RefCell<VaultHost>>) -> Result<()> {
+pub async fn serve_host<V>(listener: TcpListener, vaults: V) -> Result<()>
+where
+    V: Into<crate::net::vaults::VaultSet>,
+{
+    let vaults = vaults.into();
     let connections = Rc::new(Cell::new(0));
     let provisional = Rc::new(Cell::new(0));
     loop {
-        let (mut stream, _) = listener.accept().await?;
+        let _ = vaults.take_disconnects();
+        let (mut stream, _) = tokio::select! {
+            accepted = listener.accept() => accepted?,
+            _ = tokio::time::sleep(Duration::from_millis(25)) => continue,
+        };
         let Some(connection) = CounterPermit::acquire(&connections, MAX_CONNECTIONS) else {
             continue;
         };
         let Some(provisional) = CounterPermit::acquire(&provisional, MAX_PROVISIONAL) else {
             continue;
         };
-        let vault = vault.clone();
+        let vaults = vaults.clone();
         tokio::task::spawn_local(async move {
             let _connection = connection;
             let mut progress = HandshakeProgress::default();
-            let keys = vault.borrow().keys.clone();
+            let keys = vaults.keys();
             let admission = tokio::time::timeout(HANDSHAKE_DEADLINE, async {
-                let established =
-                    session::establish(&mut stream, &keys, None, &mut progress).await?;
+                let established = session::establish_guarded(
+                    &mut stream,
+                    &keys,
+                    None,
+                    &mut progress,
+                    |peer_id| vaults.has_confirmed_pair(peer_id),
+                )
+                .await?;
                 let peer = established.peer;
-                {
-                    let mut state = vault.borrow_mut();
-                    if !state.active_peers.insert(peer.peer_id) {
-                        return Err(Error::State("peer already connected"));
-                    }
-                }
-                let permit = PeerPermit {
-                    vault: vault.clone(),
-                    peer: peer.peer_id,
-                };
-                keys.block_live_traffic(peer.peer_id, TRANSPORT_GATE)?;
                 let frame = read_after_ack(&mut stream, established.session.epoch).await?;
                 if frame.kind != frame::GCM_PACKET_KIND {
-                    keys.discard_pair(peer.peer_id)?;
+                    let denial = send_control(
+                        &mut stream,
+                        &keys,
+                        peer.peer_id,
+                        &NetControl::AdmissionDenied,
+                    )
+                    .await;
+                    if !progress.had_pair {
+                        keys.discard_pair(peer.peer_id)?;
+                    }
+                    denial?;
                     return Err(Error::AuthenticationFailed);
                 }
-                let admit = (|| -> Result<()> {
+                let request = match (|| -> Result<_> {
                     let packet = encoding::decode_control_packet(&frame.payload)?;
                     let plaintext = session::open_packet(&keys, peer.peer_id, &packet)?;
-                    let request = encoding::decode_join_request(&plaintext, &peer)?;
-                    vault.borrow_mut().admit(&request, &peer)
-                })();
-                if let Err(error) = admit {
-                    keys.discard_pair(peer.peer_id)?;
-                    return Err(error);
+                    encoding::decode_join_request(&plaintext, &peer)
+                })() {
+                    Ok(request) => request,
+                    Err(error) => {
+                        let denial = send_control(
+                            &mut stream,
+                            &keys,
+                            peer.peer_id,
+                            &NetControl::AdmissionDenied,
+                        )
+                        .await;
+                        if !progress.had_pair {
+                            keys.discard_pair(peer.peer_id)?;
+                        }
+                        denial?;
+                        return Err(error);
+                    }
+                };
+                if let Some(bound) = vaults.bound_vault(peer.peer_id) {
+                    if bound != request.vault_id {
+                        send_control(
+                            &mut stream,
+                            &keys,
+                            peer.peer_id,
+                            &NetControl::JoinRejected {
+                                bound,
+                                requested: request.vault_id,
+                            },
+                        )
+                        .await?;
+                        return Err(Error::VaultSessionConflict {
+                            peer_id: peer.peer_id,
+                            bound,
+                            requested: request.vault_id,
+                        });
+                    }
                 }
-                Ok((peer.peer_id, permit))
+                let admit = (|| -> Result<_> {
+                    let vault = vaults
+                        .get(request.vault_id)
+                        .ok_or(Error::AuthenticationFailed)?;
+                    {
+                        let mut state = vault.borrow_mut();
+                        if !state.active_peers.insert(peer.peer_id) {
+                            return Err(Error::State("peer already connected"));
+                        }
+                        if let Err(error) = state.admit(&request, &peer) {
+                            state.active_peers.remove(&peer.peer_id);
+                            return Err(error);
+                        }
+                    }
+                    vaults.bind(peer.peer_id, request.vault_id)?;
+                    keys.block_live_traffic(peer.peer_id, TRANSPORT_GATE)?;
+                    Ok((vault, request.vault_id))
+                })();
+                let (vault, vault_id) = match admit {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let denial = send_control(
+                            &mut stream,
+                            &keys,
+                            peer.peer_id,
+                            &NetControl::AdmissionDenied,
+                        )
+                        .await;
+                        if !progress.had_pair {
+                            keys.discard_pair(peer.peer_id)?;
+                        }
+                        denial?;
+                        return Err(error);
+                    }
+                };
+                let permit = PeerPermit {
+                    vault: vault.clone(),
+                    vaults: vaults.clone(),
+                    vault_id,
+                    peer: peer.peer_id,
+                };
+                Ok((peer.peer_id, vault, permit))
             })
             .await;
             drop(provisional);
             let result = match admission {
-                Ok(Ok((peer, permit))) => {
+                Ok(Ok((peer, vault, permit))) => {
                     let _peer = permit;
                     async {
                         flush_to_peer(&mut stream, &vault, peer).await?;
@@ -444,10 +584,12 @@ async fn flush_to_peer(
             return Err(Error::State("mailbox drain exceeds frame budget"));
         }
         let challenge = state.host.issue_flush_challenge(peer)?;
+        let historical = state.host.historical_documents();
         (
             FlushOffer {
                 challenge: challenge.clone(),
                 frame_count: count,
+                historical,
             },
             challenge,
         )
@@ -476,7 +618,7 @@ async fn flush_to_peer(
     if prepared.envelopes().len() != offer.frame_count as usize {
         return Err(Error::State("mailbox changed during challenge"));
     }
-    let digest = encoding::mailbox_digest(prepared.envelopes())?;
+    let digest = encoding::flush_transport_digest(prepared.envelopes(), &offer.historical)?;
     for envelope in prepared.envelopes() {
         send_frame(stream, &body_frame(envelope)?).await?;
     }
@@ -576,14 +718,12 @@ pub async fn join_host(
     // Authenticity and numeric target validation precede any connection attempt.
     ad.verify(unix_time()?)?;
     let mut progress = HandshakeProgress::default();
-    let mut joined_packet_sent = false;
     let result = tokio::time::timeout(HANDSHAKE_DEADLINE, async {
         let mut stream = TcpStream::connect(ad.addr).await?;
         session::establish(&mut stream, &keys, Some(ad), &mut progress).await?;
         let request = JoinRequest::sign(&keys, ad.vault_id, code)?;
         let packet =
             session::seal_packet(&keys, ad.peer_id, &encoding::encode_join_request(&request)?)?;
-        joined_packet_sent = true;
         send_frame(
             &mut stream,
             &Frame::new(
@@ -593,6 +733,24 @@ pub async fn join_host(
         )
         .await?;
         let offer = read_after_ack(&mut stream, keys.current_session(ad.peer_id)?.epoch).await?;
+        if offer.kind == frame::GCM_PACKET_KIND {
+            let packet = encoding::decode_control_packet(&offer.payload)?;
+            let plaintext = session::open_packet(&keys, ad.peer_id, &packet)?;
+            return match encoding::decode_net_control(&plaintext)? {
+                NetControl::JoinRejected { bound, requested } => Err(Error::VaultSessionConflict {
+                    peer_id: keys.peer_id()?,
+                    bound,
+                    requested,
+                }),
+                NetControl::AdmissionDenied => {
+                    if !progress.had_pair {
+                        keys.discard_pair(ad.peer_id)?;
+                    }
+                    Err(Error::AuthenticationFailed)
+                }
+                _ => Err(Error::AuthenticationFailed),
+            };
+        }
         if offer.kind != frame::FLUSH_CHALLENGE_KIND {
             return Err(Error::State("expected flush challenge after Join"));
         }
@@ -602,9 +760,6 @@ pub async fn join_host(
     let (mut stream, offer) = match result {
         Ok(Ok(value)) => value,
         failure => {
-            if joined_packet_sent {
-                keys.discard_pair(ad.peer_id)?;
-            }
             return match failure {
                 Ok(Err(error)) => Err(error),
                 _ => Err(Error::State("handshake deadline exceeded")),
@@ -632,16 +787,19 @@ pub async fn join_host(
         .await
         .map_err(|_| Error::State("welcome timeout"))??;
     match welcome {
-        NetControl::JoinAccepted { vault_id, members } if vault_id == ad.vault_id => {
-            let mut ids = BTreeSet::new();
-            for identity in members {
-                identity.verify()?;
-                ids.insert(identity.peer_id);
-                if identity.peer_id != keys.peer_id()? {
-                    keys.import_peer(identity)?;
-                }
+        NetControl::JoinAccepted {
+            vault_id,
+            members,
+            historical,
+            denied,
+        } if vault_id == ad.vault_id => {
+            let ids = import_current_identities(&keys, &members)?;
+            if !ids.is_disjoint(&denied) {
+                return Err(Error::AuthenticationFailed);
             }
-            replica.borrow_mut().add_members(&ids)?;
+            let mut replica = replica.borrow_mut();
+            replica.learn_history(&historical)?;
+            replica.reconcile_members(&ids, &denied)?;
         }
         _ => return Err(Error::AuthenticationFailed),
     }
@@ -656,6 +814,31 @@ pub async fn join_host(
         pending_controls: Vec::new(),
         pending_control_bytes: 0,
     })
+}
+
+fn import_current_identities(
+    keys: &KeyStore,
+    members: &[IdentityDocument],
+) -> Result<BTreeSet<PeerId>> {
+    let local = keys.identity()?;
+    let mut ids = BTreeSet::new();
+    for identity in members {
+        ids.insert(identity.peer_id);
+        if identity.peer_id == local.peer_id {
+            if *identity != local {
+                return Err(Error::AuthenticationFailed);
+            }
+            continue;
+        }
+        if keys
+            .load_verified_peer(&identity.peer_id)
+            .is_ok_and(|cached| cached == *identity)
+        {
+            continue;
+        }
+        keys.import_peer(identity.clone())?;
+    }
+    Ok(ids)
 }
 
 async fn receive_flush(
@@ -693,8 +876,10 @@ async fn receive_flush(
     }
     // Open every old counter in FIFO order into existing staging BEFORE the
     // newer authenticated end marker can advance the Packet replay window.
-    let prepared = replica.borrow_mut().prepare_mailbox(&envelopes)?;
-    let digest = encoding::mailbox_digest(&envelopes)?;
+    let prepared = replica
+        .borrow_mut()
+        .prepare_mailbox_with_history(&envelopes, &offer.historical)?;
+    let digest = encoding::flush_transport_digest(&envelopes, &offer.historical)?;
     let end = tokio::time::timeout(IDLE_TIMEOUT, read_control(stream, keys, peer))
         .await
         .map_err(|_| Error::State("mailbox end timeout"))??;
@@ -722,10 +907,20 @@ async fn serve_live(
     let mut upload: Option<PendingUpload> = None;
     loop {
         keys.require_live_traffic(peer)?;
-        let received = tokio::time::timeout(
-            IDLE_TIMEOUT,
-            read_after_ack(stream, keys.current_session(peer)?.epoch),
-        )
+        let epoch = keys.current_session(peer)?.epoch;
+        let received = tokio::time::timeout(IDLE_TIMEOUT, async {
+            let received = read_after_ack(stream, epoch);
+            tokio::pin!(received);
+            loop {
+                if !vault.borrow().host.has_member(&peer) {
+                    return Err(Error::State("peer membership was revoked"));
+                }
+                tokio::select! {
+                    result = &mut received => return result,
+                    _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+                }
+            }
+        })
         .await
         .map_err(|_| Error::State("peer idle timeout"))??;
         // A mailbox refresh can close the pair gate while this read is pending.
@@ -1074,7 +1269,23 @@ impl JoinedPeer {
                 _ => return Err(Error::State("unexpected pull response frame")),
             }
         }
-        let pull = InProcessPullCoordinator::new(self.keys.clone(), self.replica.borrow().chunks());
+        let chunks = self.replica.borrow().chunks();
+        let unavailable = if responses.is_empty() && !request.chunk_ids().is_empty() {
+            let chunks = chunks
+                .lock()
+                .map_err(|_| Error::State("chunk store poisoned"))?;
+            request
+                .chunk_ids()
+                .iter()
+                .any(|chunk_id| !chunks.has(chunk_id))
+        } else {
+            false
+        };
+        if unavailable {
+            self.acknowledge_after_drain().await?;
+            return Err(Error::State("holder returned no requested chunks"));
+        }
+        let pull = InProcessPullCoordinator::new(self.keys.clone(), chunks);
         let written = pull.accept(&responses, trusted_manifest)?;
         self.acknowledge_after_drain().await?;
         Ok(written)
@@ -1332,8 +1543,13 @@ impl JoinedPeer {
                     }
                     Ok(true)
                 }
-                NetControl::JoinAccepted { vault_id, members } if vault_id == self.vault_id => {
-                    self.apply_member_identities(members)?;
+                NetControl::JoinAccepted {
+                    vault_id,
+                    members,
+                    historical,
+                    denied,
+                } if vault_id == self.vault_id => {
+                    self.apply_member_identities(members, historical, denied)?;
                     Ok(false)
                 }
                 _ => Err(Error::State("unexpected live reply")),
@@ -1353,16 +1569,17 @@ impl JoinedPeer {
         Ok(false)
     }
 
-    fn apply_member_identities(&mut self, members: Vec<IdentityDocument>) -> Result<()> {
-        let mut ids = BTreeSet::new();
-        for identity in members {
-            identity.verify()?;
-            ids.insert(identity.peer_id);
-            if identity.peer_id != self.keys.peer_id()? {
-                self.keys.import_peer(identity)?;
-            }
+    fn apply_member_identities(
+        &mut self,
+        members: Vec<IdentityDocument>,
+        historical: Vec<IdentityDocument>,
+        denied: BTreeSet<PeerId>,
+    ) -> Result<()> {
+        let ids = import_current_identities(&self.keys, &members)?;
+        if !ids.is_disjoint(&denied) {
+            return Err(Error::AuthenticationFailed);
         }
-        self.replica.borrow_mut().add_members(&ids)?;
+        self.replica.borrow_mut().learn_history(&historical)?;
         let pending = std::mem::take(&mut self.pending_controls);
         self.pending_control_bytes = 0;
         for record in pending {
@@ -1370,6 +1587,7 @@ impl JoinedPeer {
                 .borrow_mut()
                 .apply_authenticated_control(record)?;
         }
+        self.replica.borrow_mut().reconcile_members(&ids, &denied)?;
         Ok(())
     }
 
@@ -1383,7 +1601,10 @@ impl JoinedPeer {
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            interval.tick().await;
             self.keys.require_live_traffic(self.peer_id)?;
             let through = self.replica.borrow().last_applied();
             send_control(
@@ -1394,7 +1615,6 @@ impl JoinedPeer {
             )
             .await?;
             self.drain_live_reply().await?;
-            tokio::time::sleep(Duration::from_secs(10)).await;
         }
     }
 }

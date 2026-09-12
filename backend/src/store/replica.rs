@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
+    crypto::identity::IdentityDocument,
     ids::{ChunkId, FileId, PeerId},
+    net::join::VaultMetadata,
     protocol::manifest::Manifest,
     store::tree::{DirectoryTree, Dirent},
     sync::host::{ControlRecord, QueueContent},
@@ -20,6 +22,10 @@ pub struct ReplicaMetadata {
     pub mailboxes: BTreeMap<PeerId, Vec<QueueContent>>,
     pub acked_through: BTreeMap<PeerId, u64>,
     pub chunk_index: BTreeMap<ChunkId, (FileId, u64)>,
+    pub denied: BTreeSet<PeerId>,
+    pub admission: Option<VaultMetadata>,
+    pub historical_members: BTreeSet<PeerId>,
+    pub identity_documents: BTreeMap<PeerId, IdentityDocument>,
 }
 
 impl ReplicaMetadata {
@@ -34,6 +40,10 @@ impl ReplicaMetadata {
             mailboxes: BTreeMap::new(),
             acked_through: BTreeMap::new(),
             chunk_index: BTreeMap::new(),
+            denied: BTreeSet::new(),
+            admission: None,
+            historical_members: BTreeSet::new(),
+            identity_documents: BTreeMap::new(),
         }
     }
 

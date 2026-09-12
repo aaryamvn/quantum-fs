@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, future::Future, time::Duration};
 
 use crate::{
     crypto::{
@@ -7,7 +7,7 @@ use crate::{
     },
     encoding,
     error::{Error, Result},
-    ids::{FileId, PeerId},
+    ids::{ChunkId, FileId, PeerId},
     keystore::KeyStore,
     protocol::{
         manifest::TrustedManifest,
@@ -22,6 +22,21 @@ pub trait PullCoordinator {
     fn request(&self, request: &PullRequest) -> Result<()>;
 }
 
+/// A bounded pull attempt can be incomplete when all known holders are stale
+/// or unreachable. Only an empty `missing` list means delivery is complete.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PullReport {
+    pub chunks_written: usize,
+    pub holders_tried: usize,
+    pub missing: Vec<ChunkId>,
+}
+
+impl PullReport {
+    pub fn is_complete(&self) -> bool {
+        self.missing.is_empty()
+    }
+}
+
 #[derive(Clone)]
 pub struct InProcessPullCoordinator {
     keys: KeyStore,
@@ -31,6 +46,136 @@ pub struct InProcessPullCoordinator {
 impl InProcessPullCoordinator {
     pub fn new(keys: KeyStore, chunks: SharedChunkStore) -> Self {
         Self { keys, chunks }
+    }
+
+    /// Consume locator candidates in order. A nomination is only a hint: a
+    /// holder may have evicted since its HaveReply. Fetches use the existing
+    /// packet-GCM pull request and chunk-GCM responses, never holder manifests.
+    pub fn pull_from_holders<F>(
+        &self,
+        request: &PullRequest,
+        trusted: &TrustedManifest,
+        holders: &[PeerId],
+        mut fetch: F,
+    ) -> Result<PullReport>
+    where
+        F: FnMut(PeerId, &ControlPacket) -> Result<Vec<PullResponse>>,
+    {
+        let mut report = self.begin_pull(request, trusted)?;
+        let mut tried = BTreeSet::new();
+        for &holder in holders {
+            if report.is_complete() {
+                break;
+            }
+            if !tried.insert(holder) {
+                continue;
+            }
+            let remaining = PullRequest::new(report.missing.clone())?;
+            let Ok(packet) = self.encrypt_request(holder, &remaining) else {
+                continue;
+            };
+            report.holders_tried += 1;
+            if let Ok(responses) = fetch(holder, &packet) {
+                self.accept_holder(holder, &responses, trusted, &remaining, &mut report)?;
+            }
+            report.missing = self.missing_chunks(request)?;
+        }
+        Ok(report)
+    }
+
+    /// Network callers supply an existing live stream operation. Bound each
+    /// holder attempt so a stale nomination cannot prevent fallback forever.
+    /// Timeout cancels `fetch`: it must own its stream or otherwise close that
+    /// stream on cancellation. Never reuse a partially consumed TCP frame.
+    pub async fn pull_from_holders_async<F, Fut>(
+        &self,
+        request: &PullRequest,
+        trusted: &TrustedManifest,
+        holders: &[PeerId],
+        mut fetch: F,
+    ) -> Result<PullReport>
+    where
+        F: FnMut(PeerId, ControlPacket) -> Fut,
+        Fut: Future<Output = Result<Vec<PullResponse>>>,
+    {
+        let mut report = self.begin_pull(request, trusted)?;
+        let mut tried = BTreeSet::new();
+        for &holder in holders {
+            if report.is_complete() {
+                break;
+            }
+            if !tried.insert(holder) {
+                continue;
+            }
+            let remaining = PullRequest::new(report.missing.clone())?;
+            let Ok(packet) = self.encrypt_request(holder, &remaining) else {
+                continue;
+            };
+            report.holders_tried += 1;
+            if let Ok(Ok(responses)) =
+                tokio::time::timeout(Duration::from_secs(5), fetch(holder, packet)).await
+            {
+                self.accept_holder(holder, &responses, trusted, &remaining, &mut report)?;
+            }
+            report.missing = self.missing_chunks(request)?;
+        }
+        Ok(report)
+    }
+
+    fn begin_pull(&self, request: &PullRequest, trusted: &TrustedManifest) -> Result<PullReport> {
+        if request
+            .chunk_ids()
+            .iter()
+            .any(|id| !trusted.manifest().chunk_ids.contains(id))
+        {
+            return Err(Error::AuthenticationFailed);
+        }
+        Ok(PullReport {
+            missing: self.missing_chunks(request)?,
+            ..PullReport::default()
+        })
+    }
+
+    fn missing_chunks(&self, request: &PullRequest) -> Result<Vec<ChunkId>> {
+        let chunks = self
+            .chunks
+            .lock()
+            .map_err(|_| Error::State("chunk store lock poisoned"))?;
+        Ok(request
+            .chunk_ids()
+            .iter()
+            .filter(|id| !chunks.has(id))
+            .copied()
+            .collect())
+    }
+
+    fn accept_holder(
+        &self,
+        holder: PeerId,
+        responses: &[PullResponse],
+        trusted: &TrustedManifest,
+        remaining: &PullRequest,
+        report: &mut PullReport,
+    ) -> Result<()> {
+        // Reject unsolicited frames before handing them to the existing receive
+        // helper. Authenticated plaintext and final live-dirent checks stay there.
+        if responses.len() > remaining.chunk_ids().len()
+            || responses.iter().any(|response| {
+                let body = &response.body;
+                body.header.sender_id != holder
+                    || body.file_id != trusted.manifest().file_id
+                    || usize::try_from(body.index)
+                        .ok()
+                        .and_then(|index| trusted.manifest().chunk_ids.get(index))
+                        .is_none_or(|id| !remaining.chunk_ids().contains(id))
+            })
+        {
+            return Err(Error::AuthenticationFailed);
+        }
+        // Empty responses are deliberately not completion: the next candidate
+        // still gets every missing id. An idempotent receive may write zero.
+        report.chunks_written += self.accept(responses, trusted)?;
+        Ok(())
     }
 
     pub fn serve(&self, request: &PullRequest, requester_id: PeerId) -> Result<Vec<PullResponse>> {
