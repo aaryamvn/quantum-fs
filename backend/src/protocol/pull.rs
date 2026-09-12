@@ -1,9 +1,23 @@
 use crate::{
     error::{Error, Result},
-    ids::ChunkId,
+    ids::{ChunkId, FileId},
+    protocol::packet::PacketHeader,
 };
 
 pub const MAX_PULL_CHUNK_IDS: usize = 32;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChunkBodyFrame {
+    pub header: PacketHeader,
+    pub file_id: FileId,
+    pub index: u64,
+    pub ciphertext: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PullResponse {
+    pub body: ChunkBodyFrame,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRequest {

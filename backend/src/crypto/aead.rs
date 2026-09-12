@@ -54,6 +54,19 @@ impl PairKeyState {
         *last = Some(seq.0);
         Ok(())
     }
+
+    pub(crate) fn next_outbound_seq(&self, payload_type: PayloadType) -> Result<Seq> {
+        let last = match payload_type {
+            PayloadType::Packet => self.send_packet,
+            PayloadType::ChunkBody => self.send_chunk,
+        };
+        Ok(Seq(match last {
+            Some(last) => last
+                .checked_add(1)
+                .ok_or(Error::State("AEAD send counter exhausted"))?,
+            None => 1,
+        }))
+    }
 }
 
 pub trait Aes256Gcm {

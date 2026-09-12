@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     encoding,
@@ -24,30 +27,68 @@ pub trait ChunkStore {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChunkRecord {
+    pub file_id: FileId,
+    pub index: u64,
+    pub plaintext: Vec<u8>,
+}
+
+pub type SharedChunkStore = Arc<Mutex<MemoryChunkStore>>;
+
+pub fn shared_chunk_store() -> SharedChunkStore {
+    Arc::new(Mutex::new(MemoryChunkStore::new()))
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct MemoryChunkStore {
-    plaintext: BTreeMap<ChunkId, Vec<u8>>,
+    chunks: BTreeMap<ChunkId, ChunkRecord>,
 }
 
 impl MemoryChunkStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn get_record(&self, chunk_id: &ChunkId) -> Option<&ChunkRecord> {
+        self.chunks.get(chunk_id)
+    }
+
+    pub fn remove_file(&mut self, file_id: &FileId) {
+        self.chunks.retain(|_, record| record.file_id != *file_id);
+    }
+
+    pub fn len(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.chunks.is_empty()
+    }
 }
 
 impl ChunkStore for MemoryChunkStore {
     fn put(&mut self, file_id: &FileId, index: u64, plaintext: Vec<u8>) -> ChunkId {
         let chunk_id = encoding::chunk_id(file_id, index, &plaintext);
-        self.plaintext.insert(chunk_id, plaintext);
+        self.chunks.insert(
+            chunk_id,
+            ChunkRecord {
+                file_id: *file_id,
+                index,
+                plaintext,
+            },
+        );
         chunk_id
     }
 
     fn get(&self, chunk_id: &ChunkId) -> Option<&[u8]> {
-        self.plaintext.get(chunk_id).map(Vec::as_slice)
+        self.chunks
+            .get(chunk_id)
+            .map(|record| record.plaintext.as_slice())
     }
 
     fn has(&self, chunk_id: &ChunkId) -> bool {
-        self.plaintext.contains_key(chunk_id)
+        self.chunks.contains_key(chunk_id)
     }
 }
 
@@ -64,6 +105,10 @@ mod tests {
 
         assert!(store.has(&present));
         assert_eq!(store.get(&present), Some(b"plaintext".as_slice()));
+        assert_eq!(store.get_record(&present).unwrap().index, 7);
         assert_eq!(store.have_bitset(&[absent, present]), vec![0b0000_0010]);
+
+        store.remove_file(&FileId([3; 32]));
+        assert!(store.is_empty());
     }
 }

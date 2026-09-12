@@ -2,7 +2,7 @@
 //! keystore instance. Restart discards old AES slots and prepares fresh wraps.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
@@ -20,7 +20,8 @@ use crate::{
         wrap::{ConstructionBWrap, PairSession, RustCryptoConstructionBWrap, WrapMessage},
     },
     encoding,
-    ids::{Epoch, PeerId},
+    ids::{Epoch, PeerId, Seq},
+    protocol::packet::PayloadType,
     Error, Result,
 };
 
@@ -39,6 +40,7 @@ pub(crate) struct StoreInner {
     pub(crate) retry_epochs: BTreeMap<PeerId, Epoch>,
     pub(crate) instance_id: [u8; 32],
     pub(crate) next_slot: u64,
+    pub(crate) mailbox_gates: BTreeMap<PeerId, BTreeSet<u64>>,
     identity_path: PathBuf,
     state_path: PathBuf,
     _lock: File,
@@ -102,6 +104,7 @@ impl KeyStore {
             retry_epochs: BTreeMap::new(),
             instance_id: random_bytes()?,
             next_slot: 0,
+            mailbox_gates: BTreeMap::new(),
             identity_path: path.to_owned(),
             state_path,
             _lock: lock,
@@ -289,6 +292,59 @@ impl KeyStore {
     pub fn session(&self, peer_id: PeerId, epoch: Epoch) -> Result<PairSession> {
         let inner = self.lock()?;
         inner.session(peer_id, epoch)
+    }
+
+    /// Returns the active slot for the pair's currently persisted epoch.
+    pub fn current_session(&self, peer_id: PeerId) -> Result<PairSession> {
+        let inner = self.lock()?;
+        let epoch = inner
+            .pairs
+            .get(&peer_id)
+            .map(|pair| pair.epoch)
+            .ok_or(Error::KeyUnavailable)?;
+        inner.session(peer_id, epoch)
+    }
+
+    /// Peeks at the next counter. `seal` remains the atomic reuse guard when
+    /// concurrent callers race after receiving the same value.
+    pub fn next_outbound_seq(
+        &self,
+        handle: &PairKeyHandle,
+        payload_type: PayloadType,
+    ) -> Result<Seq> {
+        self.with_pair_state(handle, |state| state.next_outbound_seq(payload_type))
+    }
+
+    pub(crate) fn block_live_traffic(&self, peer_id: PeerId, owner: u64) -> Result<()> {
+        self.lock()?
+            .mailbox_gates
+            .entry(peer_id)
+            .or_default()
+            .insert(owner);
+        Ok(())
+    }
+
+    pub(crate) fn unblock_live_traffic(&self, peer_id: PeerId, owner: u64) -> Result<()> {
+        let mut inner = self.lock()?;
+        if let Some(owners) = inner.mailbox_gates.get_mut(&peer_id) {
+            owners.remove(&owner);
+            if owners.is_empty() {
+                inner.mailbox_gates.remove(&peer_id);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn require_live_traffic(&self, peer_id: PeerId) -> Result<()> {
+        if self
+            .lock()?
+            .mailbox_gates
+            .get(&peer_id)
+            .is_some_and(|owners| !owners.is_empty())
+        {
+            return Err(Error::State("live traffic blocked until mailbox drain"));
+        }
+        Ok(())
     }
 
     /// Call after an old epoch's in-flight work drains. All clones of this slot
@@ -515,4 +571,40 @@ fn atomic_private_write(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyStore;
+    use crate::{ids::PeerId, Error, Result};
+
+    #[test]
+    fn mailbox_gate_is_shared_by_clones_and_owner_scoped() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "qfs-keystore-gate-{}-{}",
+            std::process::id(),
+            u64::from_be_bytes(super::random_bytes()?)
+        ));
+        std::fs::create_dir(&directory)?;
+        let result = (|| -> Result<()> {
+            let store = KeyStore::open(&directory.join("identity"))?;
+            let clone = store.clone();
+            let peer = PeerId([7; 32]);
+            store.block_live_traffic(peer, 10)?;
+            clone.block_live_traffic(peer, 20)?;
+            assert!(matches!(
+                clone.require_live_traffic(peer),
+                Err(Error::State(_))
+            ));
+            store.unblock_live_traffic(peer, 10)?;
+            assert!(matches!(
+                store.require_live_traffic(peer),
+                Err(Error::State(_))
+            ));
+            clone.unblock_live_traffic(peer, 20)?;
+            store.require_live_traffic(peer)
+        })();
+        let _ = std::fs::remove_dir_all(directory);
+        result
+    }
 }

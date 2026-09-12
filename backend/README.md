@@ -35,8 +35,12 @@ will deliver these through `KeyStore::pending_wraps()`; current startup sends no
 
 Optional `--host-id /path/to/host-id.bin` reads exactly 32 raw bytes identifying
 appointed member H. Host selection uses the same binary and identity as every
-member, selected by the verified local identity. Host behavior remains pending.
-IDs have no text or hex wire representation.
+member, selected by the verified local identity. A matching identity starts an
+in-memory `HostService`; weekly rotation refreshes its queued ciphertext. The
+standalone daemon currently initializes a singleton vault containing H. Tests
+and library callers supply the vault member set and drive commits in-process;
+there is no network or CLI transfer interface. IDs have no text or hex wire
+representation.
 
 ## Test
 
@@ -56,6 +60,10 @@ tampering, context separation, wrap retries and epoch collisions, restart/key
 retirement, replay windows and nonce domains, the 32-chunk pull cap, plaintext
 storage/have-bitset, and CLI/identity persistence. X-Wing uses implicit rejection:
 a wrong dk yields a different shared secret and fails wrap GCM authentication.
+Transfer tests cover two holders, encrypted pull requests, missing/idempotent
+chunks, tampering and manifest membership, offline coalescing, delete/recreate
+instructions, epoch re-sealing, keystore restart with a retained memory replica,
+flush authentication, more than 1024 queued bodies, and atomic failed-drain retry.
 
 ## Layout and implementation boundary
 
@@ -70,11 +78,18 @@ a wrong dk yields a different shared secret and fails wrap GCM authentication.
 - `src/protocol/{packet,manifest,pull}.rs`: headers, manifests, bounded pull
   requests, and per-peer/epoch/direction/type sliding-window acceptance (W=1024).
   Authentication must succeed before a receive counter is marked accepted.
-- `src/store/chunks.rs`: in-memory plaintext put/get/has and have-bitset; no
-  durable storage, per-peer ciphertext replicas, or stored random chunk nonce.
-- `src/sync/{pull,host}.rs`: stub pull and appointed-host presence TTL, ordered
-  mailbox/challenge/flush, and control fan-out interfaces. H is TCB for all shared
-  plaintext; live cursors go direct pairwise GCM, without DSA or H.
+- `src/store/chunks.rs`: in-memory plaintext put/get/has and have-bitset, retaining
+  file/index metadata for canonical chunk AAD. No durable chunk storage.
+- `src/sync/pull.rs`: in-process bounded pull, encrypted control requests and one
+  AES-GCM chunk body per response. Holders skip missing IDs. Acceptance uses a
+  pre-trusted manifest from H, checks GCM and the plaintext chunk hash, and writes
+  idempotently; a failed response batch writes no chunks.
+- `src/sync/host.rs`: vault membership, heartbeat/TTL presence, member-writer
+  signature verification, online control-only fan-out, and immediate offline
+  chunk encryption. Bodies coalesce by file/index; all control instructions
+  remain ordered. Recipient-only ML-DSA challenge authentication drains the queue.
+  H is TCB for all shared plaintext; live cursors go direct pairwise GCM,
+  without DSA or H. A stopped host rejects commits.
 
 Crypto callers import verified peer documents before creating wraps. First
 contact starts at epoch 1 from the smaller PeerId; later creation requires the
@@ -84,7 +99,20 @@ key remains available for in-flight data. Retire old session handles
 with `KeyStore::retire()` after in-flight work drains. AES send counters must
 strictly increase per type; use the same header for canonical AAD and nonce.
 
-Still left: encrypt-at-send pull validation/orchestration; host presence,
-ordered mailbox/challenge/flush behavior and control fan-out; networking and
-delivery/acknowledgment of wraps; durable chunk storage. Static ek rotation does
-not provide forward secrecy. There is no per-packet DSA or second content key.
+In-process callers establish the live pair wrap before `flush_mailbox`. Stale
+mailbox controls and bodies are re-sealed under the current epoch; chunk counters
+begin at 1 on its fresh key. Flush authenticates frames in queued order, stages
+the complete instruction log, then writes bodies matching the final manifests.
+Live pull/control entry points remain gated until flush succeeds. Exact receipts
+allow retry after a later corrupt frame without reopening accepted counters.
+Both pull and host use the same encrypt-at-send helper and the existing packet
+and chunk counter domains on K_ab.
+
+`HostService::into_state` / `resume` support a memory-state hand-off across a
+keystore reopen without retaining old keys. Mailboxes and plaintext are volatile:
+an actual process exit loses them. Durable recovery is not implemented.
+
+Still left: networking and wrap delivery/acknowledgment, join-code directory,
+durable chunk/mailbox storage, and client GUI integration. Static ek rotation
+does not provide forward secrecy. There is no per-packet DSA, second content key,
+per-peer ciphertext chunk replica, or random stored chunk nonce.

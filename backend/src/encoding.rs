@@ -15,8 +15,9 @@ use crate::{
     protocol::{
         manifest::Manifest,
         packet::{PacketHeader, PayloadType},
+        pull::{PullRequest, MAX_PULL_CHUNK_IDS},
     },
-    sync::host::FlushChallenge,
+    sync::host::{ControlRecord, ControlUpdate, FlushChallenge},
     Error, Result,
 };
 
@@ -166,6 +167,155 @@ pub fn manifest_m(manifest: &Manifest) -> Result<Vec<u8>> {
         out.extend_from_slice(&chunk_id.0);
     }
     Ok(out)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MailboxFrame {
+    Control {
+        ciphertext: Vec<u8>,
+    },
+    ChunkBody {
+        file_id: FileId,
+        index: u64,
+        ciphertext: Vec<u8>,
+    },
+}
+
+/// Encodes the typed content of a mailbox envelope. The ciphertext is already
+/// pairwise GCM output; this framing does not apply another encryption layer.
+pub fn encode_mailbox_frame(frame: &MailboxFrame) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    match frame {
+        MailboxFrame::Control { ciphertext } => {
+            out.push(0);
+            push_variable(&mut out, ciphertext)?;
+        }
+        MailboxFrame::ChunkBody {
+            file_id,
+            index,
+            ciphertext,
+        } => {
+            out.push(1);
+            out.extend_from_slice(&file_id.0);
+            out.extend_from_slice(&index.to_be_bytes());
+            push_variable(&mut out, ciphertext)?;
+        }
+    }
+    Ok(out)
+}
+
+pub fn decode_mailbox_frame(bytes: &[u8]) -> Result<MailboxFrame> {
+    let mut reader = Reader::new(bytes);
+    let frame = match reader.byte()? {
+        0 => MailboxFrame::Control {
+            ciphertext: reader.variable()?.to_vec(),
+        },
+        1 => MailboxFrame::ChunkBody {
+            file_id: FileId(reader.array()?),
+            index: reader.u64()?,
+            ciphertext: reader.variable()?.to_vec(),
+        },
+        _ => return Err(Error::InvalidInput("unknown mailbox frame kind")),
+    };
+    reader.finish()?;
+    Ok(frame)
+}
+
+pub fn encode_pull_request(request: &PullRequest) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    push_length(&mut out, request.chunk_ids().len())?;
+    for chunk_id in request.chunk_ids() {
+        out.extend_from_slice(&chunk_id.0);
+    }
+    Ok(out)
+}
+
+pub fn decode_pull_request(bytes: &[u8]) -> Result<PullRequest> {
+    let mut reader = Reader::new(bytes);
+    let count = usize::try_from(reader.u32()?)
+        .map_err(|_| Error::InvalidInput("pull request count is too large"))?;
+    if count > MAX_PULL_CHUNK_IDS {
+        return Err(Error::InvalidInput(
+            "pull request exceeds the 32 chunk identifier cap",
+        ));
+    }
+    if count > reader.remaining() / 32 {
+        return Err(Error::InvalidInput("truncated pull request"));
+    }
+    let mut chunk_ids = Vec::with_capacity(count);
+    for _ in 0..count {
+        chunk_ids.push(ChunkId(reader.array()?));
+    }
+    reader.finish()?;
+    PullRequest::new(chunk_ids)
+}
+
+/// A signed manifest record stores canonical `manifest_m` bytes followed by
+/// its detached signature. Decoding only parses fields; callers must verify
+/// that signature before inspecting or applying the decoded chunk identifiers.
+pub fn encode_control_record(record: &ControlRecord) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&record.id.to_be_bytes());
+    match &record.update {
+        ControlUpdate::NewManifest(manifest) => {
+            out.push(0);
+            push_variable(&mut out, &manifest_m(manifest)?)?;
+            push_variable(&mut out, &manifest.signature)?;
+        }
+        ControlUpdate::Add(file_id) => {
+            out.push(1);
+            out.extend_from_slice(&file_id.0);
+        }
+        ControlUpdate::Clear(file_id) => {
+            out.push(2);
+            out.extend_from_slice(&file_id.0);
+        }
+        ControlUpdate::Remove(file_id) => {
+            out.push(3);
+            out.extend_from_slice(&file_id.0);
+        }
+    }
+    Ok(out)
+}
+
+pub fn decode_control_record(bytes: &[u8]) -> Result<ControlRecord> {
+    let mut reader = Reader::new(bytes);
+    let id = reader.u64()?;
+    let update = match reader.byte()? {
+        0 => {
+            let message = reader.variable()?;
+            let signature = reader.variable()?.to_vec();
+            ControlUpdate::NewManifest(decode_manifest_message(message, signature)?)
+        }
+        1 => ControlUpdate::Add(FileId(reader.array()?)),
+        2 => ControlUpdate::Clear(FileId(reader.array()?)),
+        3 => ControlUpdate::Remove(FileId(reader.array()?)),
+        _ => return Err(Error::InvalidInput("unknown control record kind")),
+    };
+    reader.finish()?;
+    Ok(ControlRecord { id, update })
+}
+
+fn decode_manifest_message(message: &[u8], signature: Vec<u8>) -> Result<Manifest> {
+    let mut reader = Reader::new(message);
+    let file_id = FileId(reader.array()?);
+    let version = reader.u64()?;
+    let size = reader.u64()?;
+    let writer_id = PeerId(reader.array()?);
+    let count = reader.count(32)?;
+    let mut chunk_ids = Vec::with_capacity(count);
+    for _ in 0..count {
+        chunk_ids.push(ChunkId(reader.array()?));
+    }
+    reader.finish()?;
+    Ok(Manifest {
+        file_id,
+        chunk_ids,
+        size,
+        writer_id,
+        version,
+        signature,
+    })
 }
 
 pub fn flush_m(challenge: &FlushChallenge) -> [u8; 32] {
@@ -363,6 +513,10 @@ impl<'a> Reader<'a> {
 
     fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_be_bytes(self.array()?))
+    }
+
+    fn byte(&mut self) -> Result<u8> {
+        Ok(self.array::<1>()?[0])
     }
 
     fn u64(&mut self) -> Result<u64> {

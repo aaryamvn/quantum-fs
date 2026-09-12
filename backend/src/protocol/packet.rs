@@ -15,6 +15,12 @@ pub struct PacketHeader {
     pub seq: Seq,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlPacket {
+    pub header: PacketHeader,
+    pub ciphertext: Vec<u8>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
     Inbound,
