@@ -20,6 +20,6 @@ hkdf = "0.12.4"
 ml-dsa = { version = "0.1.1", default-features = false, features = ["alloc", "rand_core", "zeroize"] }
 rand = "0.10.0"
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "rt", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "signal", "time", "net", "io-util"] }
 x-wing = { version = "0.1.0", default-features = false, features = ["zeroize"] }
 zeroize = { version = "1.8.1", features = ["derive"] }

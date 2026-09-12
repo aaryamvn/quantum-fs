@@ -10,6 +10,8 @@ pub const IDENTITY_CONTEXT: &[u8] = b"qfs/v1/id";
 pub const WRAP_CONTEXT: &[u8] = b"qfs/v1/wrap";
 pub const MANIFEST_CONTEXT: &[u8] = b"qfs/v1/manifest";
 pub const FLUSH_CONTEXT: &[u8] = b"qfs/v1/flush";
+pub const DIRECTORY_CONTEXT: &[u8] = b"qfs/v1/dir";
+pub const JOIN_CONTEXT: &[u8] = b"qfs/v1/join";
 
 /// Pure ML-DSA-65 with the FIPS 204 context parameter.
 pub trait PureMlDsa {
@@ -116,6 +118,8 @@ fn require_protocol_context(context: &[u8]) -> Result<()> {
         || context == WRAP_CONTEXT
         || context == MANIFEST_CONTEXT
         || context == FLUSH_CONTEXT
+        || context == DIRECTORY_CONTEXT
+        || context == JOIN_CONTEXT
     {
         Ok(())
     } else {

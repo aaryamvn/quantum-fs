@@ -38,6 +38,7 @@ pub(crate) struct StoreInner {
     pub(crate) pairs: BTreeMap<PeerId, PersistedPair>,
     pub(crate) keys: BTreeMap<u64, PairKeyState>,
     pub(crate) retry_epochs: BTreeMap<PeerId, Epoch>,
+    pub(crate) epoch_watermarks: BTreeMap<PeerId, Epoch>,
     pub(crate) instance_id: [u8; 32],
     pub(crate) next_slot: u64,
     pub(crate) mailbox_gates: BTreeMap<PeerId, BTreeSet<u64>>,
@@ -53,6 +54,7 @@ pub(crate) struct PersistedState {
     pub(crate) peers: Vec<IdentityDocument>,
     pub(crate) pairs: Vec<PersistedPair>,
     pub(crate) keys: Vec<PersistedKey>,
+    pub(crate) epoch_watermarks: Vec<(PeerId, Epoch)>,
 }
 
 #[derive(Clone)]
@@ -102,6 +104,7 @@ impl KeyStore {
             pairs: BTreeMap::new(),
             keys: BTreeMap::new(),
             retry_epochs: BTreeMap::new(),
+            epoch_watermarks: BTreeMap::new(),
             instance_id: random_bytes()?,
             next_slot: 0,
             mailbox_gates: BTreeMap::new(),
@@ -116,6 +119,11 @@ impl KeyStore {
                 return Err(Error::AuthenticationFailed);
             }
             inner.next_slot = persisted.next_slot;
+            for (peer_id, epoch) in persisted.epoch_watermarks {
+                if epoch == Epoch(0) || inner.epoch_watermarks.insert(peer_id, epoch).is_some() {
+                    return Err(Error::InvalidInput("invalid persisted epoch watermark"));
+                }
+            }
             for peer in persisted.peers {
                 peer.verify()?;
                 if peer.peer_id == inner.local.document.peer_id
@@ -149,9 +157,16 @@ impl KeyStore {
                     &encoding::wrap_m(&pair.wrap)?,
                     &pair.wrap.signature,
                 )?;
-                if inner.pairs.insert(pair.peer_id, pair).is_some() {
+                let pair_peer_id = pair.peer_id;
+                let pair_epoch = pair.epoch;
+                if inner.pairs.insert(pair_peer_id, pair).is_some() {
                     return Err(Error::InvalidInput("duplicate persisted pair"));
                 }
+                let watermark = inner
+                    .epoch_watermarks
+                    .entry(pair_peer_id)
+                    .or_insert(Epoch(0));
+                *watermark = (*watermark).max(pair_epoch);
             }
             // Decoded prior K_ab bytes are zeroized here and never activated.
             drop(persisted.keys);
@@ -272,6 +287,58 @@ impl KeyStore {
             .collect())
     }
 
+    /// Returns this store's durable epoch watermark for a peer, or zero when unknown.
+    pub fn peer_epoch(&self, peer_id: PeerId) -> Result<Epoch> {
+        Ok(self
+            .lock()?
+            .epoch_watermarks
+            .get(&peer_id)
+            .copied()
+            .unwrap_or(Epoch(0)))
+    }
+
+    /// Returns the initiator and exact cached signed wrap for handshake retry.
+    pub fn cached_pair(&self, peer_id: PeerId) -> Result<Option<(PeerId, WrapMessage)>> {
+        Ok(self
+            .lock()?
+            .pairs
+            .get(&peer_id)
+            .map(|pair| (pair.initiator, pair.wrap.clone())))
+    }
+
+    /// Erases all provisional pair and peer state after admission fails.
+    /// WrapAck timeouts must retain the pair instead so retry can resend the
+    /// identical cached ciphertext.
+    pub fn discard_pair(&self, peer_id: PeerId) -> Result<()> {
+        let mut inner = self.lock()?;
+        inner.keys.retain(|_, state| state.peer_id != peer_id);
+        inner.pairs.remove(&peer_id);
+        inner.retry_epochs.remove(&peer_id);
+        inner.mailbox_gates.remove(&peer_id);
+        inner.peers.remove(&peer_id);
+        inner.persist()
+    }
+
+    /// Raises the durable coordination floor learned from an authenticated peer's
+    /// epoch hint. This never installs a key, wrap, or active session.
+    pub fn observe_remote_epoch(&self, peer_id: PeerId, epoch: Epoch) -> Result<()> {
+        let mut inner = self.lock()?;
+        if !inner.peers.contains_key(&peer_id) {
+            return Err(Error::KeyUnavailable);
+        }
+        if epoch
+            > inner
+                .epoch_watermarks
+                .get(&peer_id)
+                .copied()
+                .unwrap_or(Epoch(0))
+        {
+            inner.epoch_watermarks.insert(peer_id, epoch);
+            inner.persist()?;
+        }
+        Ok(())
+    }
+
     /// A collision loser must initiate at the next epoch (last-before-collision + 2).
     pub fn retry_epoch(&self, peer_id: &PeerId) -> Result<Option<Epoch>> {
         Ok(self.lock()?.retry_epochs.get(peer_id).copied())
@@ -279,14 +346,17 @@ impl KeyStore {
 
     pub fn next_epoch(&self, peer_id: &PeerId) -> Result<Epoch> {
         let inner = self.lock()?;
-        Ok(Epoch(match inner.pairs.get(peer_id) {
-            Some(pair) => pair
-                .epoch
+        let floor = inner
+            .epoch_watermarks
+            .get(peer_id)
+            .copied()
+            .unwrap_or(Epoch(0));
+        Ok(Epoch(
+            floor
                 .0
                 .checked_add(1)
                 .ok_or(Error::State("epoch exhausted"))?,
-            None => 1,
-        }))
+        ))
     }
 
     pub fn session(&self, peer_id: PeerId, epoch: Epoch) -> Result<PairSession> {
@@ -410,6 +480,8 @@ impl StoreInner {
             .retain(|_, state| state.peer_id != peer_id || state.epoch != epoch);
         self.keys
             .insert(slot, PairKeyState::new(key, peer_id, epoch));
+        let watermark = self.epoch_watermarks.entry(peer_id).or_insert(Epoch(0));
+        *watermark = (*watermark).max(epoch);
         self.pairs.insert(
             peer_id,
             PersistedPair {
@@ -438,6 +510,11 @@ impl StoreInner {
                     epoch: state.epoch,
                     key: Zeroizing::new(*state.key),
                 })
+                .collect(),
+            epoch_watermarks: self
+                .epoch_watermarks
+                .iter()
+                .map(|(peer_id, epoch)| (*peer_id, *epoch))
                 .collect(),
         };
         let result = encoding::encode_store_state(&state)
@@ -509,7 +586,7 @@ fn private_options() -> OpenOptions {
     options
 }
 
-fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
+pub(crate) fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -540,7 +617,7 @@ fn read_private(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
     Ok(Some(bytes))
 }
 
-fn atomic_private_write(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     if bytes.len() as u64 > MAX_STORE_BYTES {
         return Err(Error::InvalidInput("keystore file is too large"));
     }
@@ -576,7 +653,11 @@ fn atomic_private_write(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::KeyStore;
-    use crate::{ids::PeerId, Error, Result};
+    use crate::{
+        crypto::wrap::{ConstructionBWrap, RustCryptoConstructionBWrap},
+        ids::{Epoch, PeerId},
+        Error, Result,
+    };
 
     #[test]
     fn mailbox_gate_is_shared_by_clones_and_owner_scoped() -> Result<()> {
@@ -603,6 +684,75 @@ mod tests {
             ));
             clone.unblock_live_traffic(peer, 20)?;
             store.require_live_traffic(peer)
+        })();
+        let _ = std::fs::remove_dir_all(directory);
+        result
+    }
+
+    #[test]
+    fn discarded_pair_retains_only_monotonic_epoch_watermark() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "qfs-keystore-discard-{}-{}",
+            std::process::id(),
+            u64::from_be_bytes(super::random_bytes()?)
+        ));
+        std::fs::create_dir(&directory)?;
+        let low_path = directory.join("low");
+        let result = (|| -> Result<()> {
+            let first = KeyStore::open(&low_path)?;
+            let second = KeyStore::open(&directory.join("high"))?;
+            let first_identity = first.identity()?;
+            let second_identity = second.identity()?;
+            let first_id = first_identity.peer_id;
+            let (low, low_identity, high, high_identity) =
+                if first_identity.peer_id < second_identity.peer_id {
+                    (first, first_identity, second, second_identity)
+                } else {
+                    (second, second_identity, first, first_identity)
+                };
+            let low_path = if low.identity()?.peer_id == first_id {
+                low_path.clone()
+            } else {
+                directory.join("high")
+            };
+            low.import_peer(high_identity.clone())?;
+            high.import_peer(low_identity.clone())?;
+            let (low_session, wrap) = RustCryptoConstructionBWrap::new(low.clone()).create(
+                high_identity.peer_id,
+                &high_identity.ek,
+                Epoch(1),
+            )?;
+            RustCryptoConstructionBWrap::new(high.clone()).unwrap(low_identity.peer_id, &wrap)?;
+            assert!(low.cached_pair(high_identity.peer_id)?.map(|pair| pair.1) == Some(wrap));
+
+            low.discard_pair(high_identity.peer_id)?;
+            high.discard_pair(low_identity.peer_id)?;
+            assert!(matches!(
+                low.session(high_identity.peer_id, low_session.epoch),
+                Err(Error::KeyUnavailable)
+            ));
+            low.import_peer(high_identity.clone())?;
+            high.import_peer(low_identity.clone())?;
+            low.observe_remote_epoch(high_identity.peer_id, Epoch(7))?;
+            high.observe_remote_epoch(low_identity.peer_id, Epoch(7))?;
+            let (_, wrap) = RustCryptoConstructionBWrap::new(low.clone()).create(
+                high_identity.peer_id,
+                &high_identity.ek,
+                Epoch(8),
+            )?;
+            RustCryptoConstructionBWrap::new(high.clone()).unwrap(low_identity.peer_id, &wrap)?;
+            low.discard_pair(high_identity.peer_id)?;
+            drop(low);
+
+            let reopened = KeyStore::open(&low_path)?;
+            assert_eq!(reopened.peer_epoch(high_identity.peer_id)?, Epoch(8));
+            assert!(matches!(
+                reopened.current_session(high_identity.peer_id),
+                Err(Error::KeyUnavailable)
+            ));
+            reopened.import_peer(high_identity.clone())?;
+            assert_eq!(reopened.next_epoch(&high_identity.peer_id)?, Epoch(9));
+            Ok(())
         })();
         let _ = std::fs::remove_dir_all(directory);
         result

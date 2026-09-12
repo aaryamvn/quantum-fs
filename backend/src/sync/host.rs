@@ -108,6 +108,26 @@ pub struct FlushReport {
     pub chunks_written: usize,
 }
 
+pub struct PreparedHostFlush {
+    peer_id: PeerId,
+    challenge: FlushChallenge,
+    envelopes: Vec<MailboxEnvelope>,
+}
+
+impl PreparedHostFlush {
+    pub fn envelopes(&self) -> &[MailboxEnvelope] {
+        &self.envelopes
+    }
+}
+
+pub struct PreparedReplicaFlush {
+    peer_id: PeerId,
+    host_id: PeerId,
+    base_controls: BTreeMap<u64, ControlRecord>,
+    staged: StagedReplica,
+    report: FlushReport,
+}
+
 /// A recipient's applied host controls and plaintext replica. Only this control
 /// path can turn received signed manifests into TrustedManifest capabilities.
 pub struct MemberReplica {
@@ -216,6 +236,23 @@ impl HostService {
     }
     pub fn trusted_manifest(&self, file_id: &FileId) -> Option<&TrustedManifest> {
         self.state.manifests.get(file_id)
+    }
+    pub fn members(&self) -> &BTreeSet<PeerId> {
+        &self.state.members
+    }
+    pub fn has_member(&self, peer_id: &PeerId) -> bool {
+        self.state.members.contains(peer_id)
+    }
+    pub fn add_member(
+        &mut self,
+        document: crate::crypto::identity::IdentityDocument,
+    ) -> Result<()> {
+        self.require_running()?;
+        document.verify()?;
+        let peer_id = document.peer_id;
+        self.keys.import_peer(document)?;
+        self.state.members.insert(peer_id);
+        Ok(())
     }
 
     fn require_running(&self) -> Result<()> {
@@ -620,6 +657,58 @@ impl HostService {
         Ok(challenge)
     }
 
+    pub fn prepare_flush(
+        &mut self,
+        peer: PeerId,
+        challenge: &FlushChallenge,
+        signature: &[u8],
+    ) -> Result<PreparedHostFlush> {
+        self.require_running()?;
+        self.require_member(peer)?;
+        if self.challenges.get(&peer) != Some(challenge) {
+            return Err(Error::AuthenticationFailed);
+        }
+        let identity = self.keys.load_verified_peer(&peer)?;
+        RustCryptoPureMlDsa.verify(
+            &identity.vk,
+            FLUSH_CONTEXT,
+            &encoding::flush_m(challenge),
+            signature,
+        )?;
+        self.refresh_mailboxes()?;
+        self.keys.block_live_traffic(peer, self.state.gate_owner)?;
+        let envelopes = self
+            .state
+            .mailboxes
+            .get(&peer)
+            .map(|queue| queue.iter().map(|entry| entry.envelope.clone()).collect())
+            .unwrap_or_default();
+        Ok(PreparedHostFlush {
+            peer_id: peer,
+            challenge: challenge.clone(),
+            envelopes,
+        })
+    }
+
+    pub fn acknowledge_flush(&mut self, peer: PeerId, prepared: PreparedHostFlush) -> Result<()> {
+        self.require_running()?;
+        if prepared.peer_id != peer || self.challenges.get(&peer) != Some(&prepared.challenge) {
+            return Err(Error::AuthenticationFailed);
+        }
+        let current: Vec<_> = self
+            .state
+            .mailboxes
+            .get(&peer)
+            .map(|queue| queue.iter().map(|entry| entry.envelope.clone()).collect())
+            .unwrap_or_default();
+        if current != prepared.envelopes {
+            return Err(Error::State("mailbox changed before flush acknowledgement"));
+        }
+        self.state.mailboxes.remove(&peer);
+        self.challenges.remove(&peer);
+        self.keys.unblock_live_traffic(peer, self.state.gate_owner)
+    }
+
     /// Completes a FIFO authenticated drain in-process. Receipt caching permits
     /// retry after a corrupt body without reopening counters already accepted.
     pub fn flush_mailbox(
@@ -635,13 +724,6 @@ impl HostService {
         {
             return Err(Error::AuthenticationFailed);
         }
-        let identity = self.keys.load_verified_peer(&peer)?;
-        RustCryptoPureMlDsa.verify(
-            &identity.vk,
-            FLUSH_CONTEXT,
-            &encoding::flush_m(challenge),
-            signature,
-        )?;
         // Finish the live epoch wrap before re-sealing or opening any queued bytes.
         if recipient.keys.current_session(self.state.host_id)?.epoch
             != self.keys.current_session(peer)?.epoch
@@ -650,25 +732,15 @@ impl HostService {
                 "finish the current pair wrap before mailbox flush",
             ));
         }
-        self.refresh_mailboxes()?;
-        self.keys.block_live_traffic(peer, self.state.gate_owner)?;
+        let prepared = self.prepare_flush(peer, challenge, signature)?;
         recipient
             .keys
             .block_live_traffic(self.state.host_id, self.state.gate_owner)?;
-        let envelopes: Vec<_> = self
-            .state
-            .mailboxes
-            .get(&peer)
-            .map(|q| q.iter().map(|e| e.envelope.clone()).collect())
-            .unwrap_or_default();
-        let report = recipient.apply_mailbox(&envelopes)?;
-        self.state.mailboxes.remove(&peer);
-        self.challenges.remove(&peer);
+        let report = recipient.apply_mailbox(prepared.envelopes())?;
+        self.acknowledge_flush(peer, prepared)?;
         recipient
             .keys
             .unblock_live_traffic(self.state.host_id, self.state.gate_owner)?;
-        self.keys
-            .unblock_live_traffic(peer, self.state.gate_owner)?;
         Ok(report)
     }
 }
@@ -703,6 +775,19 @@ impl MemberReplica {
     }
     pub fn instruction_log(&self) -> &[ControlRecord] {
         &self.log
+    }
+    pub fn host_id(&self) -> PeerId {
+        self.host_id
+    }
+    pub fn peer_id(&self) -> Result<PeerId> {
+        self.keys.peer_id()
+    }
+    pub fn add_members(&mut self, members: &BTreeSet<PeerId>) -> Result<()> {
+        if !members.contains(&self.host_id) || !members.contains(&self.keys.peer_id()?) {
+            return Err(Error::AuthenticationFailed);
+        }
+        self.members.extend(members.iter().copied());
+        Ok(())
     }
 
     fn stage(&self) -> Result<StagedReplica> {
@@ -788,7 +873,10 @@ impl MemberReplica {
         Ok(())
     }
 
-    fn apply_mailbox(&mut self, envelopes: &[MailboxEnvelope]) -> Result<FlushReport> {
+    pub fn prepare_mailbox(
+        &mut self,
+        envelopes: &[MailboxEnvelope],
+    ) -> Result<PreparedReplicaFlush> {
         self.receipts.retain(|(prior, _)| envelopes.contains(prior));
         let mut staged = self.stage()?;
         let mut report = FlushReport::default();
@@ -906,8 +994,34 @@ impl MemberReplica {
                 report.chunks_written += 1;
             }
         }
-        self.apply_staged(staged)?;
+        Ok(PreparedReplicaFlush {
+            peer_id: self.keys.peer_id()?,
+            host_id: self.host_id,
+            base_controls: self.controls.clone(),
+            staged,
+            report,
+        })
+    }
+
+    pub fn commit_prepared(&mut self, prepared: PreparedReplicaFlush) -> Result<FlushReport> {
+        if prepared.peer_id != self.keys.peer_id()?
+            || prepared.host_id != self.host_id
+            || prepared.base_controls != self.controls
+        {
+            return Err(Error::State("replica changed before prepared flush commit"));
+        }
+        self.apply_staged(prepared.staged)?;
+        Ok(prepared.report)
+    }
+
+    pub fn finish_receipts(&mut self) {
         self.receipts.clear();
+    }
+
+    fn apply_mailbox(&mut self, envelopes: &[MailboxEnvelope]) -> Result<FlushReport> {
+        let prepared = self.prepare_mailbox(envelopes)?;
+        let report = self.commit_prepared(prepared)?;
+        self.finish_receipts();
         Ok(report)
     }
 }

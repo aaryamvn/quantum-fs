@@ -12,17 +12,22 @@ use quantam_fs::{
 use std::{
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 struct Directory(PathBuf);
+static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 impl Directory {
     fn new() -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("qfs-wrap-{}-{timestamp}", std::process::id()));
+        let number = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "qfs-wrap-{}-{number}-{timestamp}",
+            std::process::id()
+        ));
         fs::create_dir(&path)?;
         Ok(Self(path))
     }

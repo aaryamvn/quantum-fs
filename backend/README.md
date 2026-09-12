@@ -9,38 +9,85 @@ One crate: library `quantam_fs` and daemon `qfsd`. Runtime:
 
 ## Run
 
-Requires Rust 1.89 or newer with Cargo. From the repository root:
+Requires Rust 1.89 or newer with Cargo. Build from the repository root:
 
 ```sh
 cd backend
 cargo build
 ./target/debug/qfsd --help
-./target/debug/qfsd --data-dir .qfs --listen-addr 127.0.0.1:7447 --peer-identity-path identity
 ```
 
-The daemon creates or verifies a real identity with independently generated
-X-Wing and ML-DSA-65 keys, logs `identity verified; crypto ready`, and waits until
-Ctrl-C or SIGTERM (Unix) for graceful shutdown. Empty scaffold placeholders are
-upgraded; invalid nonempty identities are rejected without replacement. Relative
-identity paths resolve under `--data-dir`; absolute paths are used directly.
-The configured listen address is parsed; no network socket is opened yet.
+Run these in three terminals, each with `backend/` as its working directory:
 
-The identity file contains private key seeds and the signed public document.
-Sibling `.keys` and `.lock` files hold verified peers/pair state and an exclusive
-process lock. Files use owner-only permissions on Unix; keys are not encrypted
-at rest. See [`crypto-keystore.md`](../docs/decisions/crypto-keystore.md).
-On restart, prior AES slots are discarded and fresh signed wraps are prepared
-for established pairs. The daemon also prepares new epochs weekly. Networking
-will deliver these through `KeyStore::pending_wraps()`; current startup sends nothing.
+```sh
+# Directory: signed ads and replay metadata only; no member identity or replica.
+./target/debug/qfsd --directory --data-dir .qfs-directory --listen-addr 127.0.0.1:7440
+```
 
-Optional `--host-id /path/to/host-id.bin` reads exactly 32 raw bytes identifying
-appointed member H. Host selection uses the same binary and identity as every
-member, selected by the verified local identity. A matching identity starts an
-in-memory `HostService`; weekly rotation refreshes its queued ciphertext. The
-standalone daemon currently initializes a singleton vault containing H. Tests
-and library callers supply the vault member set and drive commits in-process;
-there is no network or CLI transfer interface. IDs have no text or hex wire
-representation.
+```sh
+# H: creates or reloads one vault and prints its Base32 join code on stderr.
+./target/debug/qfsd --create-vault --data-dir .qfs-host --listen-addr 127.0.0.1:7447 --directory-addr 127.0.0.1:7440
+```
+
+```sh
+# Paste the host's uppercase, unpadded Base32 code after running read.
+read -r QFS_JOIN_CODE
+./target/debug/qfsd --data-dir .qfs-member --listen-addr 127.0.0.1:7448 --directory-addr 127.0.0.1:7440 --join-code "$QFS_JOIN_CODE"
+```
+
+Successful admission logs `accepted vault member; pair live` on H and
+`joined vault` on the member. Ctrl-C or SIGTERM shuts down gracefully.
+The runtime is Tokio current-thread with `LocalSet` and `spawn_local`.
+The peer handshake deadline is five seconds, idle timeout is 30 seconds,
+and H permits 32 simultaneous provisional handshakes and 128 TCP connections.
+
+The listener binds before H signs its directory ad. Port zero is supported for
+binding; the resulting actual port is advertised. `--advertise-addr IP:PORT`
+overrides that target for NAT/container forwarding. Targets must be numeric
+`SocketAddr` values (IPv4 or bracketed IPv6), with a nonzero port and a specified
+IP address; there are no hostnames or DNS. Unspecified binds such as `0.0.0.0`
+need an explicit usable advertisement address.
+
+`--peer-identity-path identity` remains the default; relative paths resolve
+inside `--data-dir`. Optional `--host-id /path/to/host-id.bin` reads exactly 32
+raw bytes identifying appointed H. `--create-vault` appoints the local identity;
+plain member/host-role startup without a vault binds but rejects inbound joins.
+There is one `qfsd` binary, including directory mode.
+
+A member creates or verifies independent X-Wing and ML-DSA-65 identity keys.
+The identity file contains private seeds and its signed public document;
+`.keys` and `.lock` siblings hold pair state and an exclusive process lock.
+The `vault` file persists the vault id, current code, membership and ad timestamp.
+Directory mode writes `directory.bin` and its lock, without constructing a
+`KeyStore` or `HostService`. Private files use owner-only Unix permissions and
+atomic replacement; keys are not encrypted at rest. See
+[`crypto-keystore.md`](../docs/decisions/crypto-keystore.md).
+
+H rotates pair epochs weekly; disconnected members reconnect and finish the
+current wrap before mailbox traffic. Startup discards prior active AES slots
+and prepares fresh signed wraps. `VaultHost::rotate_code` rotates admission
+immediately, then publishes the new code and forgets the old directory row.
+Code rotation is currently a library API, not an additional CLI command.
+
+## Handshake and directory
+
+Peer TCP order is identity verification, epoch hints, coordinated Construction B
+wrap, final WrapAck, then the signed Join request inside one GCM packet. Lost
+WrapAck retries reuse the cached ciphertext. Bad or rotated codes cause rejection
+and provisional key-slot removal; durable epoch watermarks prevent regression.
+Join M remains raw vault/code bytes plus canonical identity M. Its detached
+ML-DSA signature uses `qfs/v1/join`; both M and signature are inside GCM.
+
+Join codes appear in directory lookup/publication requests, as explicitly allowed
+for the non-member directory. They never appear in pre-GCM peer handshake frames.
+Joiners verify the ad's `qfs/v1/dir` signature, peer-id binding and age before
+connecting. H checks its own current code; a directory row does not grant admission.
+
+The directory rejects non-monotonic updates for each peer/vault, including replay
+after forget, and caps ads at 32 per peer and 10,000 total. Ads expire after seven
+days; timestamps more than 120 seconds ahead are rejected. Bounded replay
+watermarks expire only after the acceptance horizon. Persistence uses file fsync,
+atomic rename and parent-directory fsync; temporary partial writes are not served.
 
 ## Test
 
@@ -64,6 +111,9 @@ Transfer tests cover two holders, encrypted pull requests, missing/idempotent
 chunks, tampering and manifest membership, offline coalescing, delete/recreate
 instructions, epoch re-sealing, keystore restart with a retained memory replica,
 flush authentication, more than 1024 queued bodies, and atomic failed-drain retry.
+TCP tests cover actual daemon processes, directory replay/tampering, code rotation,
+provisional cleanup, cached WrapAck retry, pre-GCM wire capture, corrupted queued
+frames and reconnect re-sealing across a keystore reopen with retained memory state.
 
 ## Layout and implementation boundary
 
@@ -71,7 +121,7 @@ flush authentication, more than 1024 queued bodies, and atomic failed-drain retr
   startup/shutdown, host selection, opaque durable key slots, canonical bytes,
   bounded local persistence decoding, errors/newtypes, and SHA-256.
 - `src/crypto/{identity,wrap,aead,sign}.rs`: verified self-certifying identities,
-  Pure ML-DSA-65 signatures with identity/wrap/manifest/flush contexts, X-Wing
+  Pure ML-DSA-65 signatures with identity/wrap/manifest/flush and directory/join contexts, X-Wing
   Construction B, single-use HKDF-SHA256 wrap keys, and AES-256-GCM. One opaque
   K_ab handle serves packets and file bytes. Secret buffers and retired slots
   zeroize; imported EK rotation prepares a fresh wrap for the same principal.
@@ -91,6 +141,11 @@ flush authentication, more than 1024 queued bodies, and atomic failed-drain retr
   H is TCB for all shared plaintext; live cursors go direct pairwise GCM,
   without DSA or H. A stopped host rejects commits.
 
+- `src/net/{frame,directory,session,join}.rs`: bounded versioned TCP frames,
+  signed directory, peer handshake, single-vault admission, heartbeat/control
+  delivery and adapters for the existing atomic mailbox staging. Frame bodies
+  over 1 MiB, unknown types and unknown versions close the connection.
+
 Crypto callers import verified peer documents before creating wraps. First
 contact starts at epoch 1 from the smaller PeerId; later creation requires the
 next epoch. `retry()` returns the cached ciphertext. A simultaneous-wrap loser
@@ -99,12 +154,16 @@ key remains available for in-flight data. Retire old session handles
 with `KeyStore::retire()` after in-flight work drains. AES send counters must
 strictly increase per type; use the same header for canonical AAD and nonce.
 
-In-process callers establish the live pair wrap before `flush_mailbox`. Stale
+Callers establish the live pair wrap before `flush_mailbox`; TCP calls thin
+prepare/acknowledge adapters using the same staging and re-sealing code. Stale
 mailbox controls and bodies are re-sealed under the current epoch; chunk counters
 begin at 1 on its fresh key. Flush authenticates frames in queued order, stages
 the complete instruction log, then writes bodies matching the final manifests.
 Live pull/control entry points remain gated until flush succeeds. Exact receipts
 allow retry after a later corrupt frame without reopening accepted counters.
+On TCP, an authenticated end marker commits to the ordered batch; H keeps its
+snapshot until it receives the recipient's encrypted apply acknowledgment.
+The transport prepares old counters before opening that newer end marker.
 Both pull and host use the same encrypt-at-send helper and the existing packet
 and chunk counter domains on K_ab.
 
@@ -112,7 +171,10 @@ and chunk counter domains on K_ab.
 keystore reopen without retaining old keys. Mailboxes and plaintext are volatile:
 an actual process exit loses them. Durable recovery is not implemented.
 
-Still left: networking and wrap delivery/acknowledgment, join-code directory,
-durable chunk/mailbox storage, and client GUI integration. Static ek rotation
-does not provide forward secrecy. There is no per-packet DSA, second content key,
-per-peer ciphertext chunk replica, or random stored chunk nonce.
+Still left: durable chunks/mailboxes, path/tree filesystem behavior, kick,
+multi-vault hosting and client GUI integration. Pull and commit orchestration
+remain available in-process; the current TCP application loop handles admission,
+mailbox catch-up, heartbeat and host control delivery. There is no CLI file-transfer
+or filesystem interface yet. Static ek rotation does not provide forward secrecy.
+There is no per-packet DSA, second content key, per-peer ciphertext chunk replica,
+or random stored chunk nonce.

@@ -2,6 +2,7 @@ use std::{
     fs,
     path::PathBuf,
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -14,11 +15,16 @@ use quantam_fs::{
 };
 
 struct TestDir(PathBuf);
+static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 impl TestDir {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = std::env::temp_dir().join(format!("qfsd-test-{}-{unique}", std::process::id()));
+        let number = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "qfsd-test-{}-{number}-{unique}",
+            std::process::id()
+        ));
         fs::create_dir(&path)?;
         Ok(Self(path))
     }

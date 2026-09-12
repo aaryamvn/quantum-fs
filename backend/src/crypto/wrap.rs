@@ -232,19 +232,17 @@ impl ConstructionBWrap for RustCryptoConstructionBWrap {
         if peer.ek != peer_ek {
             return Err(Error::AuthenticationFailed);
         }
-        let next = match inner.pairs.get(&peer_id) {
-            Some(pair) => pair
-                .epoch
-                .0
-                .checked_add(1)
-                .ok_or(Error::State("epoch exhausted"))?,
-            None => {
-                if local_id >= peer_id {
-                    return Err(Error::State("smaller peer initiates first contact"));
-                }
-                1
-            }
-        };
+        if !inner.pairs.contains_key(&peer_id) && local_id >= peer_id {
+            return Err(Error::State("smaller peer initiates first contact"));
+        }
+        let next = inner
+            .epoch_watermarks
+            .get(&peer_id)
+            .copied()
+            .unwrap_or(Epoch(0))
+            .0
+            .checked_add(1)
+            .ok_or(Error::State("epoch exhausted"))?;
         if epoch.0 != next {
             return Err(Error::InvalidInput("wrap must use the next epoch"));
         }
@@ -296,8 +294,18 @@ impl ConstructionBWrap for RustCryptoConstructionBWrap {
             &message.signature,
         )?;
         let mut collision = false;
+        let expected_first = Epoch(
+            inner
+                .epoch_watermarks
+                .get(&sender_id)
+                .copied()
+                .unwrap_or(Epoch(0))
+                .0
+                .checked_add(1)
+                .ok_or(Error::State("epoch exhausted"))?,
+        );
         match inner.pairs.get(&sender_id) {
-            None if sender_id >= local_id || message.epoch != Epoch(1) => {
+            None if sender_id >= local_id || message.epoch != expected_first => {
                 return Err(Error::State("invalid first-contact initiator or epoch"));
             }
             Some(previous) if message.epoch < previous.epoch => {

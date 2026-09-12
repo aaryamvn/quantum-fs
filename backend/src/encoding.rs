@@ -2,6 +2,8 @@
 //! and Pure ML-DSA M where applicable; signatures themselves are not part of M.
 //! IDs are raw bytes, integers big-endian, variable fields u32-length-prefixed.
 
+use std::{net::SocketAddr, str::FromStr};
+
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -12,12 +14,17 @@ use crate::{
     },
     ids::{ChunkId, Epoch, FileId, PeerId},
     keystore::{PersistedKey, PersistedPair, PersistedState},
+    net::{
+        directory::{DirForget, DirectoryAd, DirectoryState, DirectoryWatermark},
+        join::{FlushOffer, JoinRequest, NetControl, NetWelcome, VaultMetadata},
+        JoinCode, VaultId,
+    },
     protocol::{
         manifest::Manifest,
-        packet::{PacketHeader, PayloadType},
-        pull::{PullRequest, MAX_PULL_CHUNK_IDS},
+        packet::{ControlPacket, PacketHeader, PayloadType},
+        pull::{ChunkBodyFrame, PullRequest, MAX_PULL_CHUNK_IDS},
     },
-    sync::host::{ControlRecord, ControlUpdate, FlushChallenge},
+    sync::host::{ControlRecord, ControlUpdate, FlushChallenge, MailboxEnvelope},
     Error, Result,
 };
 
@@ -26,7 +33,10 @@ const PEER_ID_DOMAIN: &[u8] = b"qfs/v1/peer";
 const WRAP_PAIR_DOMAIN: &[u8] = b"qfs/v1/wrap/pair/";
 const LOCAL_IDENTITY_MAGIC: &[u8] = b"qfs/local/identity/";
 const STORE_STATE_MAGIC: &[u8] = b"qfs/local/keys/";
+const DIRECTORY_STATE_MAGIC: &[u8] = b"qfs/local/directory/";
+const VAULT_METADATA_MAGIC: &[u8] = b"qfs/local/vault/";
 const LOCAL_FORMAT_VERSION: u8 = 1;
+const MAX_DIRECTORY_RECORDS: usize = 10_000;
 
 pub fn peer_id(vk: &[u8]) -> PeerId {
     let mut hash = Sha256::new();
@@ -145,6 +155,21 @@ pub fn identity_m(document: &IdentityDocument) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+pub fn encode_identity(document: &IdentityDocument) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    push_variable(&mut out, &identity_m(document)?)?;
+    push_variable(&mut out, &document.signature)?;
+    Ok(out)
+}
+
+pub fn decode_identity(bytes: &[u8]) -> Result<IdentityDocument> {
+    let mut reader = Reader::new(bytes);
+    let message = reader.variable()?;
+    let signature = reader.variable()?;
+    reader.finish()?;
+    decode_identity_document(message, signature)
+}
+
 pub fn wrap_m(message: &WrapMessage) -> Result<Vec<u8>> {
     require_sorted_pair(&message.min_id, &message.max_id)?;
     let mut out = Vec::new();
@@ -154,6 +179,360 @@ pub fn wrap_m(message: &WrapMessage) -> Result<Vec<u8>> {
     out.extend_from_slice(&message.min_id.0);
     out.extend_from_slice(&message.max_id.0);
     Ok(out)
+}
+
+pub fn encode_wrap(message: &WrapMessage) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    push_variable(&mut out, &wrap_m(message)?)?;
+    push_variable(&mut out, &message.signature)?;
+    Ok(out)
+}
+
+pub fn decode_wrap(bytes: &[u8]) -> Result<WrapMessage> {
+    let mut reader = Reader::new(bytes);
+    let message = reader.variable()?;
+    let signature = reader.variable()?;
+    reader.finish()?;
+    decode_wrap_message(message, signature)
+}
+
+pub fn encode_control_packet(packet: &ControlPacket) -> Result<Vec<u8>> {
+    let mut out = packet_aad(&packet.header);
+    push_variable(&mut out, &packet.ciphertext)?;
+    Ok(out)
+}
+
+pub fn decode_control_packet(bytes: &[u8]) -> Result<ControlPacket> {
+    let mut reader = Reader::new(bytes);
+    let aad = reader.take(81)?;
+    let (header, payload_type) = decode_aad(aad)?;
+    if payload_type != PayloadType::Packet {
+        return Err(Error::InvalidInput("control packet has chunk AAD"));
+    }
+    let ciphertext = reader.variable()?.to_vec();
+    reader.finish()?;
+    Ok(ControlPacket { header, ciphertext })
+}
+
+pub fn encode_chunk_body_frame(frame: &ChunkBodyFrame) -> Result<Vec<u8>> {
+    let mut out = chunk_aad(&frame.header, &frame.file_id, frame.index);
+    push_variable(&mut out, &frame.ciphertext)?;
+    Ok(out)
+}
+
+pub fn decode_chunk_body_frame(bytes: &[u8]) -> Result<ChunkBodyFrame> {
+    let mut reader = Reader::new(bytes);
+    let aad = reader.take(121)?;
+    let (header, payload_type) = decode_aad(aad)?;
+    if payload_type != PayloadType::ChunkBody {
+        return Err(Error::InvalidInput("chunk body frame has packet AAD"));
+    }
+    let mut file_id = [0; 32];
+    file_id.copy_from_slice(&aad[81..113]);
+    let mut index = [0; 8];
+    index.copy_from_slice(&aad[113..121]);
+    let ciphertext = reader.variable()?.to_vec();
+    reader.finish()?;
+    Ok(ChunkBodyFrame {
+        header,
+        file_id: FileId(file_id),
+        index: u64::from_be_bytes(index),
+        ciphertext,
+    })
+}
+
+pub fn epoch_hint_m(peer_id: &PeerId, epoch: Epoch) -> Vec<u8> {
+    let mut out = Vec::with_capacity(40);
+    out.extend_from_slice(&peer_id.0);
+    out.extend_from_slice(&epoch.0.to_be_bytes());
+    out
+}
+
+pub fn decode_epoch_hint(bytes: &[u8]) -> Result<(PeerId, Epoch)> {
+    let mut reader = Reader::new(bytes);
+    let peer_id = PeerId(reader.array()?);
+    let epoch = Epoch(reader.u64()?);
+    reader.finish()?;
+    Ok((peer_id, epoch))
+}
+
+pub fn encode_wrap_ack(epoch: Epoch, retry_pending: bool) -> [u8; 9] {
+    let mut out = [0; 9];
+    out[..8].copy_from_slice(&epoch.0.to_be_bytes());
+    out[8] = u8::from(retry_pending);
+    out
+}
+
+pub fn decode_wrap_ack(bytes: &[u8]) -> Result<(Epoch, bool)> {
+    let mut reader = Reader::new(bytes);
+    let epoch = Epoch(reader.u64()?);
+    let retry_pending = match reader.byte()? {
+        0 => false,
+        1 => true,
+        _ => return Err(Error::InvalidInput("invalid WrapAck retry flag")),
+    };
+    reader.finish()?;
+    Ok((epoch, retry_pending))
+}
+
+pub fn directory_ad_m(ad: &DirectoryAd) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&ad.peer_id.0);
+    out.extend_from_slice(&ad.vault_id.0);
+    // Only numeric SocketAddr forms are admitted; hostnames and DNS are outside v1.
+    push_variable(&mut out, ad.addr.to_string().as_bytes())?;
+    push_variable(&mut out, &ad.ek)?;
+    push_variable(&mut out, &ad.vk)?;
+    out.extend_from_slice(&ad.issued_at.to_be_bytes());
+    Ok(out)
+}
+
+pub fn encode_directory_ad(ad: &DirectoryAd) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    push_variable(&mut out, &directory_ad_m(ad)?)?;
+    push_variable(&mut out, &ad.signature)?;
+    Ok(out)
+}
+
+pub fn decode_directory_ad(bytes: &[u8]) -> Result<DirectoryAd> {
+    let mut reader = Reader::new(bytes);
+    let message = reader.variable()?;
+    let signature = reader.variable()?.to_vec();
+    reader.finish()?;
+    decode_directory_ad_message(message, signature)
+}
+
+pub fn dir_forget_m(request: &DirForget) -> Vec<u8> {
+    let mut out = Vec::with_capacity(88);
+    out.extend_from_slice(&request.peer_id.0);
+    out.extend_from_slice(&request.vault_id.0);
+    out.extend_from_slice(&request.join_code.0);
+    out.extend_from_slice(&request.issued_at.to_be_bytes());
+    out
+}
+
+pub fn encode_dir_forget(request: &DirForget) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    push_variable(&mut out, &dir_forget_m(request))?;
+    push_variable(&mut out, &request.signature)?;
+    Ok(out)
+}
+
+pub fn decode_dir_forget(bytes: &[u8]) -> Result<DirForget> {
+    let mut reader = Reader::new(bytes);
+    let message = reader.variable()?;
+    let signature = reader.variable()?.to_vec();
+    reader.finish()?;
+    let mut message = Reader::new(message);
+    let request = DirForget {
+        peer_id: PeerId(message.array()?),
+        vault_id: VaultId(message.array()?),
+        join_code: JoinCode(message.array()?),
+        issued_at: message.u64()?,
+        signature,
+    };
+    message.finish()?;
+    Ok(request)
+}
+
+pub fn join_request_m(request: &JoinRequest) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&request.vault_id.0);
+    out.extend_from_slice(&request.join_code.0);
+    out.extend_from_slice(&identity_m(&request.document)?);
+    Ok(out)
+}
+
+pub fn encode_join_request(request: &JoinRequest) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    push_variable(&mut out, &join_request_m(request)?)?;
+    push_variable(&mut out, &request.signature)?;
+    Ok(out)
+}
+
+/// The identity signature was already verified during the preceding Identity
+/// exchange and is not duplicated in Join M. The decoded request must contain
+/// the exact canonical bytes of that exchanged document.
+pub fn decode_join_request(bytes: &[u8], exchanged: &IdentityDocument) -> Result<JoinRequest> {
+    let mut reader = Reader::new(bytes);
+    let message = reader.variable()?;
+    let signature = reader.variable()?.to_vec();
+    reader.finish()?;
+
+    let mut message_reader = Reader::new(message);
+    let vault_id = VaultId(message_reader.array()?);
+    let join_code = JoinCode(message_reader.array()?);
+    let identity = message_reader.take(message_reader.remaining())?;
+    if identity != identity_m(exchanged)? {
+        return Err(Error::AuthenticationFailed);
+    }
+    message_reader.finish()?;
+    Ok(JoinRequest {
+        vault_id,
+        join_code,
+        document: exchanged.clone(),
+        signature,
+    })
+}
+
+pub fn encode_net_welcome(welcome: &NetWelcome) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&welcome.vault_id.0);
+    push_length(&mut out, welcome.members.len())?;
+    for member in &welcome.members {
+        push_variable(&mut out, &encode_identity(member)?)?;
+    }
+    Ok(out)
+}
+
+pub fn decode_net_welcome(bytes: &[u8]) -> Result<NetWelcome> {
+    let mut reader = Reader::new(bytes);
+    let vault_id = VaultId(reader.array()?);
+    let count = reader.count(56)?;
+    let mut members = Vec::with_capacity(count);
+    for _ in 0..count {
+        members.push(decode_identity(reader.variable()?)?);
+    }
+    reader.finish()?;
+    Ok(NetWelcome { vault_id, members })
+}
+
+pub fn encode_flush_offer(offer: &FlushOffer) -> Result<[u8; 36]> {
+    if offer.frame_count > 1_000_000 {
+        return Err(Error::InvalidInput("flush frame count exceeds cap"));
+    }
+    let mut out = [0; 36];
+    out[..32].copy_from_slice(&offer.challenge.0);
+    out[32..].copy_from_slice(&offer.frame_count.to_be_bytes());
+    Ok(out)
+}
+
+pub fn decode_flush_offer(bytes: &[u8]) -> Result<FlushOffer> {
+    let mut reader = Reader::new(bytes);
+    let challenge = FlushChallenge(reader.array()?);
+    let frame_count = reader.u32()?;
+    reader.finish()?;
+    if frame_count > 1_000_000 {
+        return Err(Error::InvalidInput("flush frame count exceeds cap"));
+    }
+    Ok(FlushOffer {
+        challenge,
+        frame_count,
+    })
+}
+
+pub fn encode_net_control(control: &NetControl) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    match control {
+        NetControl::JoinAccepted { vault_id, members } => {
+            out.push(1);
+            out.extend_from_slice(&encode_net_welcome(&NetWelcome {
+                vault_id: *vault_id,
+                members: members.clone(),
+            })?);
+        }
+        NetControl::FlushEnd { digest } => {
+            out.push(2);
+            out.extend_from_slice(digest);
+        }
+        NetControl::FlushApplied { digest } => {
+            out.push(3);
+            out.extend_from_slice(digest);
+        }
+        NetControl::Ready => out.push(4),
+        NetControl::Heartbeat => out.push(5),
+    }
+    Ok(out)
+}
+
+pub fn decode_net_control(bytes: &[u8]) -> Result<NetControl> {
+    let mut reader = Reader::new(bytes);
+    let control = match reader.byte()? {
+        1 => {
+            let welcome = decode_net_welcome(reader.take(reader.remaining())?)?;
+            NetControl::JoinAccepted {
+                vault_id: welcome.vault_id,
+                members: welcome.members,
+            }
+        }
+        2 => NetControl::FlushEnd {
+            digest: reader.array()?,
+        },
+        3 => NetControl::FlushApplied {
+            digest: reader.array()?,
+        },
+        4 => NetControl::Ready,
+        5 => NetControl::Heartbeat,
+        _ => {
+            return Err(Error::InvalidInput(
+                "unknown encrypted network control kind",
+            ))
+        }
+    };
+    reader.finish()?;
+    Ok(control)
+}
+
+pub fn encode_vault_metadata(metadata: &VaultMetadata) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.extend_from_slice(VAULT_METADATA_MAGIC);
+    out.push(LOCAL_FORMAT_VERSION);
+    out.extend_from_slice(&metadata.vault_id.0);
+    out.extend_from_slice(&metadata.join_code.0);
+    out.extend_from_slice(&metadata.issued_at.to_be_bytes());
+    push_length(&mut out, metadata.members.len())?;
+    for member in &metadata.members {
+        out.extend_from_slice(&member.0);
+    }
+    Ok(out)
+}
+
+pub fn decode_vault_metadata(bytes: &[u8]) -> Result<VaultMetadata> {
+    let mut reader = Reader::new(bytes);
+    reader.require_prefix(VAULT_METADATA_MAGIC)?;
+    reader.require_version()?;
+    let vault_id = VaultId(reader.array()?);
+    let join_code = JoinCode(reader.array()?);
+    let issued_at = reader.u64()?;
+    let count = reader.count(32)?;
+    let mut members = Vec::with_capacity(count);
+    for _ in 0..count {
+        let member = PeerId(reader.array()?);
+        if members.contains(&member) {
+            return Err(Error::InvalidInput("duplicate vault member"));
+        }
+        members.push(member);
+    }
+    reader.finish()?;
+    Ok(VaultMetadata {
+        vault_id,
+        join_code,
+        issued_at,
+        members,
+    })
+}
+
+fn decode_directory_ad_message(message: &[u8], signature: Vec<u8>) -> Result<DirectoryAd> {
+    let mut reader = Reader::new(message);
+    let peer_id = PeerId(reader.array()?);
+    let vault_id = VaultId(reader.array()?);
+    let addr = std::str::from_utf8(reader.variable()?)
+        .map_err(|_| Error::InvalidInput("directory address is not UTF-8"))?;
+    let addr = SocketAddr::from_str(addr)
+        .map_err(|_| Error::InvalidInput("directory address is not a numeric socket address"))?;
+    let ek = reader.variable()?.to_vec();
+    let vk = reader.variable()?.to_vec();
+    let issued_at = reader.u64()?;
+    reader.finish()?;
+    Ok(DirectoryAd {
+        peer_id,
+        vault_id,
+        addr,
+        ek,
+        vk,
+        issued_at,
+        signature,
+    })
 }
 
 pub fn manifest_m(manifest: &Manifest) -> Result<Vec<u8>> {
@@ -219,6 +598,92 @@ pub fn decode_mailbox_frame(bytes: &[u8]) -> Result<MailboxFrame> {
     };
     reader.finish()?;
     Ok(frame)
+}
+
+/// Transport form for a queued envelope. `queued_at` is local host metadata
+/// and is intentionally omitted; a received envelope reconstructs it as zero.
+pub fn encode_mailbox_envelope(envelope: &MailboxEnvelope) -> Result<Vec<u8>> {
+    let header = PacketHeader {
+        version: crate::protocol::packet::PROTOCOL_VERSION,
+        sender_id: envelope.sender_id,
+        receiver_id: envelope.recipient_id,
+        epoch: envelope.epoch,
+        seq: envelope.seq,
+    };
+    let mut out = Vec::new();
+    match decode_mailbox_frame(&envelope.ciphertext)? {
+        MailboxFrame::Control { ciphertext } => {
+            out.push(0);
+            push_variable(
+                &mut out,
+                &encode_control_packet(&ControlPacket { header, ciphertext })?,
+            )?;
+        }
+        MailboxFrame::ChunkBody {
+            file_id,
+            index,
+            ciphertext,
+        } => {
+            out.push(1);
+            push_variable(
+                &mut out,
+                &encode_chunk_body_frame(&ChunkBodyFrame {
+                    header,
+                    file_id,
+                    index,
+                    ciphertext,
+                })?,
+            )?;
+        }
+    }
+    Ok(out)
+}
+
+pub fn decode_mailbox_envelope(bytes: &[u8]) -> Result<MailboxEnvelope> {
+    let mut reader = Reader::new(bytes);
+    let (header, ciphertext) = match reader.byte()? {
+        0 => {
+            let packet = decode_control_packet(reader.variable()?)?;
+            let ciphertext = encode_mailbox_frame(&MailboxFrame::Control {
+                ciphertext: packet.ciphertext,
+            })?;
+            (packet.header, ciphertext)
+        }
+        1 => {
+            let frame = decode_chunk_body_frame(reader.variable()?)?;
+            let ciphertext = encode_mailbox_frame(&MailboxFrame::ChunkBody {
+                file_id: frame.file_id,
+                index: frame.index,
+                ciphertext: frame.ciphertext,
+            })?;
+            (frame.header, ciphertext)
+        }
+        _ => return Err(Error::InvalidInput("unknown mailbox transport kind")),
+    };
+    reader.finish()?;
+    Ok(MailboxEnvelope {
+        recipient_id: header.receiver_id,
+        sender_id: header.sender_id,
+        epoch: header.epoch,
+        seq: header.seq,
+        queued_at: 0,
+        ciphertext,
+    })
+}
+
+/// Canonical ordered mailbox commitment. Host-local queue timestamps are not
+/// delivery data and do not affect the digest acknowledged by the recipient.
+pub fn mailbox_wire_m(envelopes: &[MailboxEnvelope]) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    push_length(&mut out, envelopes.len())?;
+    for envelope in envelopes {
+        push_variable(&mut out, &encode_mailbox_envelope(envelope)?)?;
+    }
+    Ok(out)
+}
+
+pub fn mailbox_digest(envelopes: &[MailboxEnvelope]) -> Result<[u8; 32]> {
+    Ok(Sha256::digest(mailbox_wire_m(envelopes)?).into())
 }
 
 pub fn encode_pull_request(request: &PullRequest) -> Result<Vec<u8>> {
@@ -388,6 +853,12 @@ pub(crate) fn encode_store_state(state: &PersistedState) -> Result<Zeroizing<Vec
         out.extend_from_slice(&key.epoch.0.to_be_bytes());
         out.extend_from_slice(key.key.as_ref());
     }
+
+    push_length(&mut out, state.epoch_watermarks.len())?;
+    for (peer_id, epoch) in &state.epoch_watermarks {
+        out.extend_from_slice(&peer_id.0);
+        out.extend_from_slice(&epoch.0.to_be_bytes());
+    }
     Ok(out)
 }
 
@@ -433,6 +904,17 @@ pub(crate) fn decode_store_state(bytes: &[u8]) -> Result<PersistedState> {
             key: Zeroizing::new(reader.array()?),
         });
     }
+
+    // Early v1 stores ended after keys. An appended watermark section keeps
+    // those files readable while retaining epochs after provisional discard.
+    let mut epoch_watermarks = Vec::new();
+    if reader.remaining() != 0 {
+        let watermark_count = reader.count(40)?;
+        epoch_watermarks.reserve(watermark_count);
+        for _ in 0..watermark_count {
+            epoch_watermarks.push((PeerId(reader.array()?), Epoch(reader.u64()?)));
+        }
+    }
     reader.finish()?;
     Ok(PersistedState {
         local_id,
@@ -440,7 +922,58 @@ pub(crate) fn decode_store_state(bytes: &[u8]) -> Result<PersistedState> {
         peers,
         pairs,
         keys,
+        epoch_watermarks,
     })
+}
+
+pub(crate) fn encode_directory_state(state: &DirectoryState) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.extend_from_slice(DIRECTORY_STATE_MAGIC);
+    out.push(LOCAL_FORMAT_VERSION);
+    push_length(&mut out, state.ads.len())?;
+    for (join_code, ad) in &state.ads {
+        out.extend_from_slice(&join_code.0);
+        push_variable(&mut out, &encode_directory_ad(ad)?)?;
+    }
+    push_length(&mut out, state.watermarks.len())?;
+    for watermark in &state.watermarks {
+        out.extend_from_slice(&watermark.peer_id.0);
+        out.extend_from_slice(&watermark.vault_id.0);
+        out.extend_from_slice(&watermark.issued_at.to_be_bytes());
+        push_variable(&mut out, &watermark.vk)?;
+    }
+    Ok(out)
+}
+
+pub(crate) fn decode_directory_state(bytes: &[u8]) -> Result<DirectoryState> {
+    let mut reader = Reader::new(bytes);
+    reader.require_prefix(DIRECTORY_STATE_MAGIC)?;
+    reader.require_version()?;
+    let ad_count = reader.count(20)?;
+    if ad_count > MAX_DIRECTORY_RECORDS {
+        return Err(Error::InvalidInput("directory ad count exceeds cap"));
+    }
+    let mut ads = Vec::with_capacity(ad_count);
+    for _ in 0..ad_count {
+        let join_code = JoinCode(reader.array()?);
+        let ad = decode_directory_ad(reader.variable()?)?;
+        ads.push((join_code, ad));
+    }
+    let watermark_count = reader.count(76)?;
+    if watermark_count > MAX_DIRECTORY_RECORDS {
+        return Err(Error::InvalidInput("directory watermark count exceeds cap"));
+    }
+    let mut watermarks = Vec::with_capacity(watermark_count);
+    for _ in 0..watermark_count {
+        watermarks.push(DirectoryWatermark {
+            peer_id: PeerId(reader.array()?),
+            vault_id: VaultId(reader.array()?),
+            issued_at: reader.u64()?,
+            vk: reader.variable()?.to_vec(),
+        });
+    }
+    reader.finish()?;
+    Ok(DirectoryState { ads, watermarks })
 }
 
 fn decode_identity_document(message: &[u8], signature: &[u8]) -> Result<IdentityDocument> {
@@ -579,6 +1112,7 @@ mod persistence_tests {
             peers: Vec::new(),
             pairs: Vec::new(),
             keys: Vec::new(),
+            epoch_watermarks: Vec::new(),
         }
     }
 
@@ -645,6 +1179,7 @@ mod persistence_tests {
                 epoch: Epoch(4),
                 key: Zeroizing::new([0xa5; 32]),
             }],
+            epoch_watermarks: vec![(peer_id, Epoch(4))],
         };
 
         let encoded = must_ok(encode_store_state(&state));
@@ -658,6 +1193,7 @@ mod persistence_tests {
         assert!(decoded.keys[0].peer_id == peer_id);
         assert!(decoded.keys[0].epoch == Epoch(4));
         assert!(decoded.keys[0].key.as_ref() == [0xa5; 32]);
+        assert!(decoded.epoch_watermarks == vec![(peer_id, Epoch(4))]);
     }
 
     #[test]
@@ -680,6 +1216,14 @@ mod persistence_tests {
         let mut truncated_key = must_ok(encode_store_state(&state));
         assert!(truncated_key.pop().is_some());
         assert!(decode_store_state(&truncated_key).is_err());
+    }
+
+    #[test]
+    fn store_state_reads_legacy_v1_without_epoch_watermarks() {
+        let encoded = must_ok(encode_store_state(&empty_state(PeerId([0x44; 32]))));
+        let legacy = &encoded[..encoded.len() - 4];
+        let decoded = must_ok(decode_store_state(legacy));
+        assert!(decoded.epoch_watermarks.is_empty());
     }
 
     #[test]
