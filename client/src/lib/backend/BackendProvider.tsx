@@ -1,0 +1,122 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+
+import type { BackendClient } from "./client";
+import { createBackend } from "./index";
+import type { DaemonStatus, JoinCode, OrchestrationServer, ServerId, Vault } from "./types";
+
+export interface BackendContextValue {
+  client: BackendClient;
+  servers: OrchestrationServer[];
+  status: DaemonStatus | null;
+  loading: boolean;
+  error: string | null;
+  refresh(): Promise<void>;
+  addServer(input: { name: string; address: string }): Promise<OrchestrationServer>;
+  createVault(serverId: ServerId, name: string): Promise<Vault>;
+  joinVault(code: JoinCode): Promise<Vault>;
+}
+
+const BackendContext = createContext<BackendContextValue | null>(null);
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+export function BackendProvider({ children }: { children: ReactNode }) {
+  // One client for the lifetime of the app: Tauri inside the shell, mock in the browser.
+  const [client] = useState<BackendClient>(() => createBackend());
+  const [servers, setServers] = useState<OrchestrationServer[]>([]);
+  const [status, setStatus] = useState<DaemonStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const alive = useRef(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [nextStatus, nextServers] = await Promise.all([
+        client.status(),
+        client.listServers(),
+      ]);
+      if (!alive.current) return;
+      setStatus(nextStatus);
+      setServers(nextServers);
+      setError(null);
+    } catch (e) {
+      if (!alive.current) return;
+      setError(message(e));
+    } finally {
+      if (alive.current) setLoading(false);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    alive.current = true;
+    void refresh();
+    const unsubscribe = client.subscribe((e) => {
+      if (e.type === "servers-changed") void refresh();
+      else setStatus(e.status);
+    });
+    return () => {
+      alive.current = false;
+      unsubscribe();
+    };
+  }, [client, refresh]);
+
+  const addServer = useCallback(
+    async (input: { name: string; address: string }) => {
+      const server = await client.addServer(input);
+      await refresh();
+      return server;
+    },
+    [client, refresh],
+  );
+
+  const createVault = useCallback(
+    async (serverId: ServerId, name: string) => {
+      const vault = await client.createVault(serverId, name);
+      await refresh();
+      return vault;
+    },
+    [client, refresh],
+  );
+
+  const joinVault = useCallback(
+    async (code: JoinCode) => {
+      const vault = await client.joinVault(code);
+      await refresh();
+      return vault;
+    },
+    [client, refresh],
+  );
+
+  const value = useMemo<BackendContextValue>(
+    () => ({
+      client,
+      servers,
+      status,
+      loading,
+      error,
+      refresh,
+      addServer,
+      createVault,
+      joinVault,
+    }),
+    [client, servers, status, loading, error, refresh, addServer, createVault, joinVault],
+  );
+
+  return <BackendContext.Provider value={value}>{children}</BackendContext.Provider>;
+}
+
+export function useBackend(): BackendContextValue {
+  const value = useContext(BackendContext);
+  if (!value) throw new Error("useBackend must be used inside <BackendProvider>");
+  return value;
+}

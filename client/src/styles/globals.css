@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Urbanist";
+  src: url("/fonts/Urbanist-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+@theme {
+  --font-sans: "Urbanist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --color-bg: #000000;
+  --color-surface: #0b0b0c;
+  --color-surface-hover: #131315;
+  --color-surface-active: #19191c;
+
+  --color-line: rgba(255, 255, 255, 0.06);
+  --color-line-strong: rgba(255, 255, 255, 0.12);
+
+  --color-fg: #f5f5f7;
+  --color-fg-2: rgba(245, 245, 247, 0.62);
+  --color-fg-3: rgba(245, 245, 247, 0.36);
+
+  --color-coral: #ff7b7b;
+  --color-violet: #4e0eff;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  html {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-optical-sizing: auto;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  body {
+    margin: 0;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  input,
+  textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  ::selection {
+    background: rgba(78, 14, 255, 0.45);
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: default;
+  }
+
+  :focus {
+    outline: none;
+  }
+
+  :focus-visible {
+    outline: 1px solid rgba(255, 255, 255, 0.32);
+    outline-offset: 2px;
+  }
+}
+
+/* Film grain drift — 8 discrete steps so the noise jitters instead of sliding. */
+@keyframes grain-shift {
+  0% {
+    background-position: 0 0;
+  }
+  12.5% {
+    background-position: -40px 32px;
+  }
+  25% {
+    background-position: 24px -56px;
+  }
+  37.5% {
+    background-position: -72px 8px;
+  }
+  50% {
+    background-position: 48px 40px;
+  }
+  62.5% {
+    background-position: -16px -24px;
+  }
+  75% {
+    background-position: 64px -8px;
+  }
+  87.5% {
+    background-position: -32px 56px;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+.grain-anim {
+  animation: grain-shift 0.66s steps(1) infinite;
+}
