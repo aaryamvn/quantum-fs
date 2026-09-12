@@ -36,7 +36,7 @@ next:       stage bundle → vm-demo.sh redeploy (guests get QFS_DIRECTORY_ADDR=
 open:       only 2 macOS guests can run → third client on the host; live cursors off (no member-to-member channel); e2e test still running against the pre-fix runtime
 
 ## Outcome   (fill at completion · ≤10 lines · facts only)
-changed:
-verified:
-not-done:
-gotchas:
+changed:    backend (admin port net/admin.rs, net/short_code.rs, heartbeat_once, re-admission with stale code, ops ring, tests/admin.rs, tests/net_rejoin.rs, README); client/src-tauri (node/* embedded runtime, bridge/fs_commands/fs_types/lib rewired, tests/e2e_node.rs); client/src (seam openFile/importFiles/vault-removed, 6-box join code, import action, loading states, shell notice); scripts demo_servers.sh + vm-demo.sh; docs/decisions/client-backend-embed.md
+verified:   backend `cargo test` 41 result lines all ok + clippy -D warnings + fmt; client `npm run typecheck` + `npm run build` clean; src-tauri `cargo build` 0 warnings; `cargo test --test e2e_node` 6/6 consecutive passes (two nodes + real qfsd: create, join by 6-char code in ~0.5–1 s, folder/rename/color/file seen on the peer in 0–411 ms, 3 MiB import pulled + assembled byte-identical, kick notified in ~1 s, leave)
+not-done:   live cursors/hover/drag presence (no member-to-member channel; sync-host-tcb forbids H relay); per-node access lists are advisory sidecar data (no ACL in protocol); setMemberRole rejects (host-vs-member only); daemon --create-vault CLI path still mints 26-char codes; host tears down a live session on a benign Link name collision instead of replying (backend follow-up); bootstrap mailbox is not restaged for a re-admitted member (backend follow-up)
+gotchas:    admin port = listen port + 1000, LAN-reachable, token printed once as `qfsd: app connect string ip:port/TOKEN` (tokens change on every --fresh restart → wipe client state or re-add servers); clients need QFS_DIRECTORY_ADDR (or <data_dir>/directory.txt or a known server) to resolve 6-char codes; QFS_DATA_DIR runs several clients on one machine; macOS bash 3.2 treats a UTF-8 "…" after `$VAR` as part of the name under set -u; Apple Virtualization runs at most 2 macOS guests (third client on the host); screencapture is blocked for the agent's terminal
