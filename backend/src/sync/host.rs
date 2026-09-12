@@ -41,6 +41,8 @@ use crate::{
 pub(crate) const MAX_BOOTSTRAP_FRAMES: usize = 100_000;
 pub(crate) const MAX_BOOTSTRAP_BYTES: usize = 64 * 1024 * 1024;
 const BOOTSTRAP_FRAME_OVERHEAD: usize = 256;
+/// Bounded operator view of the newest committed control ids.
+const RECENT_OPS: usize = 2048;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Presence {
@@ -150,6 +152,9 @@ pub struct HostService {
     defer_persistence: bool,
     admission_path: Option<PathBuf>,
     disconnects: Vec<PeerId>,
+    /// Local operator telemetry only: never persisted, never replicated.
+    recent_ops: VecDeque<(u64, PeerId, u64)>,
+    last_seen: BTreeMap<PeerId, u64>,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -271,6 +276,8 @@ impl HostService {
             defer_persistence: false,
             admission_path: None,
             disconnects: Vec::new(),
+            recent_ops: VecDeque::new(),
+            last_seen: BTreeMap::new(),
         })
     }
 
@@ -287,6 +294,8 @@ impl HostService {
             defer_persistence: false,
             admission_path: None,
             disconnects: Vec::new(),
+            recent_ops: VecDeque::new(),
+            last_seen: BTreeMap::new(),
         };
         // Undelivered live controls become queued catch-up on a replacement host.
         let pending = std::mem::take(&mut host.state.online);
@@ -475,6 +484,7 @@ impl HostService {
             .checked_add(ttl)
             .ok_or(Error::InvalidInput("presence TTL overflow"))?;
         self.presence.insert(peer, expires);
+        self.last_seen.insert(peer, unix_millis());
         // Heartbeats never clear queued traffic gates.
         Ok(())
     }
@@ -488,6 +498,57 @@ impl HostService {
             .and_then(|expires| expires.checked_duration_since(Instant::now()))
             .filter(|ttl| !ttl.is_zero())
             .map(|ttl| Presence { peer_id: peer, ttl }))
+    }
+
+    /// Host-local wall clock of the last heartbeat observed for `peer`.
+    pub fn last_seen(&self, peer: PeerId) -> Option<u64> {
+        self.last_seen.get(&peer).copied()
+    }
+
+    /// Undelivered mailbox entries for `peer`; no re-sealing or persistence.
+    pub fn queued_ops(&self, peer: PeerId) -> usize {
+        self.state
+            .mailboxes
+            .get(&peer)
+            .map_or(0, |queue| queue.len())
+    }
+
+    /// Committed control ids newer than `since`, oldest first.
+    pub fn recent_ops(&self, since: u64) -> Vec<(u64, PeerId, u64)> {
+        self.recent_ops
+            .iter()
+            .copied()
+            .filter(|&(id, _, _)| id > since)
+            .collect()
+    }
+
+    /// Plaintext bytes attributable to files still linked in the tree.
+    pub fn used_bytes(&self) -> u64 {
+        self.state
+            .manifests
+            .iter()
+            .filter(|(file_id, _)| self.state.tree.is_linked_file(file_id))
+            .fold(0, |total, (_, trusted)| {
+                total.saturating_add(trusted.manifest().size)
+            })
+    }
+
+    /// Records the id this commit consumed when the authenticated sender is
+    /// known. Duplicate ids (a Kick routed through fan-out) are ignored.
+    fn note_recent_op(&mut self, sender_id: PeerId, id_before: u64) {
+        if self.state.next_control <= id_before
+            || self
+                .recent_ops
+                .back()
+                .is_some_and(|&(id, _, _)| id == id_before)
+        {
+            return;
+        }
+        if self.recent_ops.len() >= RECENT_OPS {
+            self.recent_ops.pop_front();
+        }
+        self.recent_ops
+            .push_back((id_before, sender_id, unix_millis()));
     }
 
     pub fn commit(&mut self, manifest: Manifest) -> Result<()> {
@@ -538,13 +599,28 @@ impl HostService {
         {
             return Err(Error::AuthenticationFailed);
         }
-        self.commit_instruction(update.clone())
+        let id_before = self.state.next_control;
+        let result = self.commit_instruction(update.clone());
+        if result.is_ok() {
+            self.note_recent_op(sender_id, id_before);
+        }
+        result
     }
 
     fn commit_verified(
         &mut self,
         update: ControlUpdate,
         trusted: Option<TrustedManifest>,
+    ) -> Result<()> {
+        self.commit_verified_with_code(update, trusted, None)
+    }
+
+    /// `rotated` supplies the join code a Kick installs; `None` generates one.
+    fn commit_verified_with_code(
+        &mut self,
+        update: ControlUpdate,
+        trusted: Option<TrustedManifest>,
+        rotated: Option<JoinCode>,
     ) -> Result<()> {
         let kicked = if let ControlUpdate::Kick(target) = &update {
             Some(*target)
@@ -724,7 +800,10 @@ impl HostService {
                 staged.online.remove(&target);
                 staged.denied.insert(target);
                 if let Some(admission) = &mut staged.admission {
-                    admission.join_code = JoinCode::generate()?;
+                    admission.join_code = match rotated {
+                        Some(code) => code,
+                        None => JoinCode::generate()?,
+                    };
                     let next_ad = unix_time()?.max(
                         admission
                             .issued_at
@@ -1485,6 +1564,14 @@ impl MemberReplica {
     pub fn finish_receipts(&mut self) {
         self.receipts.clear();
     }
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 fn unix_time() -> Result<u64> {

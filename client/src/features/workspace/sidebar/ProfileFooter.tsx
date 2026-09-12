@@ -1,5 +1,5 @@
 import { MoreHorizontal } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Avatar } from "@/components/ui/Avatar";
 import { Chip } from "@/components/ui/Chip";
@@ -19,13 +19,53 @@ import { useWorkspace } from "../store";
  * and why sign-out is inert: there is nothing to sign out of yet.
  *
  * The row keeps its height even before the store has a member for us, so the
- * rail does not grow by 56px the moment a vault attaches.
+ * rail does not grow by 56px the moment a vault attaches. If the identity read
+ * failed outright the shell says so with `qfs:me-failed`, and the row stops
+ * promising a connection that is not coming.
  */
+
+/** Fired by the app shell when `client.me()` rejected. */
+const ME_FAILED = "qfs:me-failed";
+/** ...and when it resolved, which is what clears the latch below. */
+const ME_OK = "qfs:me-ok";
+
+/**
+ * Latched at module load, because the failure happens during the splash and the
+ * rail is not mounted yet: a footer that only listened would miss the one event
+ * it exists to hear and sit on "Connecting…" for the rest of the session.
+ *
+ * A latch that only ever sets is the other half of the same bug: the shell
+ * re-reads the identity whenever the client changes, so a failure followed by a
+ * success would leave every rail mounted afterwards saying "Not connected"
+ * about a daemon that is answering. `qfs:me-ok` unlatches it.
+ */
+let meFailed = false;
+if (typeof window !== "undefined") {
+  window.addEventListener(ME_FAILED, () => {
+    meFailed = true;
+  });
+  window.addEventListener(ME_OK, () => {
+    meFailed = false;
+  });
+}
+
 export function ProfileFooter() {
   const me = useWorkspace((s) => s.me);
   const vaultId = useWorkspace((s) => s.vaultId);
   const anchor = useRef<HTMLSpanElement>(null);
   const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(meFailed);
+
+  useEffect(() => {
+    const onFailed = () => setFailed(true);
+    const onOk = () => setFailed(false);
+    window.addEventListener(ME_FAILED, onFailed);
+    window.addEventListener(ME_OK, onOk);
+    return () => {
+      window.removeEventListener(ME_FAILED, onFailed);
+      window.removeEventListener(ME_OK, onOk);
+    };
+  }, []);
 
   function copyPeerId() {
     if (!me) return;
@@ -82,7 +122,9 @@ export function ProfileFooter() {
           </Popover>
         </>
       ) : (
-        <span className="truncate text-[12.5px] text-fg-3">Connecting…</span>
+        <span className="truncate text-[12.5px] text-fg-3">
+          {failed ? "Not connected" : "Connecting…"}
+        </span>
       )}
     </div>
   );

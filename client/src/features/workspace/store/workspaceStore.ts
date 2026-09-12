@@ -204,6 +204,8 @@ export interface WorkspaceActions {
   paste(): Promise<void>;
   download(id: NodeId): Promise<void>;
   openNode(id: NodeId): void;
+  /** Hands the daemon's file picker to the user and lands what it returns in a folder. */
+  importFiles(folderId?: NodeId): Promise<void>;
 
   openContextMenu(x: number, y: number, nodeId: NodeId | null): void;
   closeContextMenu(): void;
@@ -715,20 +717,34 @@ export const useWorkspace = create<WorkspaceStore>()((set, get) => {
         get().navigateTo(id);
         return;
       }
-      if (node.availability === "remote") {
-        void get().download(id);
-        return;
-      }
-      if (node.availability === "downloading") {
-        // Already on its way; the tile's ring is saying so. Double-clicking
-        // again is impatience, not a new instruction.
-        return;
-      }
-      // Handing the file to the OS needs the daemon's mount point; until then
-      // opening is acknowledged and recorded, which is what the Recents list reads.
-      get().toast(`Opened ${node.name}`);
-      if (state.vaultId) {
-        void Promise.resolve(state.client?.touchRecent(state.vaultId, id)).catch(() => {});
+
+      // No availability branch on purpose: the daemon pulls the bytes if it has
+      // to and reports the transfer as `fs-changed` upserts, so "open" is one
+      // instruction whether the file is here or on another peer's disk.
+      const { client, vaultId } = state;
+      if (!client || !vaultId) return;
+      void client.openFile(vaultId, id).catch((error: unknown) => {
+        get().toast(`Couldn't open ${node.name}: ${messageOf(error)}`, "error");
+      });
+      void Promise.resolve(client.touchRecent(vaultId, id)).catch(() => {});
+    },
+
+    async importFiles(folderId) {
+      const state = get();
+      const { client, vaultId } = state;
+      const parentId = folderId ?? state.folderId;
+      if (!client || !vaultId || !parentId) return;
+      try {
+        // The picker itself belongs to the daemon: it is a native dialog, and the
+        // webview has no business knowing where on disk the chosen files came from.
+        const added = await client.importFiles(vaultId, parentId);
+        if (added.length === 0) return;
+        get().toast(
+          `Imported ${added.length} file${added.length === 1 ? "" : "s"}`,
+          "success",
+        );
+      } catch (error) {
+        fail(error);
       }
     },
 

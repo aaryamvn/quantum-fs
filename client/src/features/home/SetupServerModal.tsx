@@ -12,21 +12,61 @@ const CONFIRM_MS = 1400;
 
 const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
 const HOSTNAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+/** A bracketed IPv6 literal, as a URL writes one: `[fe80::1]`. */
+const IPV6 = /^\[[0-9a-f:.]{2,45}\]$/i;
 const PORT = /^\d{1,5}$/;
+/** The admin token the host prints: base32, no padding. */
+const TOKEN = /^[A-Z2-7]{16,32}$/;
 
-/** An IPv4 address or a hostname, either one optionally carrying `:port`. */
+/**
+ * The connect string, tidied into the one form the daemon accepts.
+ *
+ * The token the host prints is base32 and upper-case, but it arrives by way of a
+ * chat message or a terminal a person retyped, so its case is not something to
+ * hold a valid address hostage over. The address half is left exactly as typed:
+ * a hostname is case-insensitive to DNS but not to the operator who wrote it,
+ * and rewriting it would put a string on screen the user never entered.
+ */
+export function normalizeAddress(raw: string): string {
+  const value = raw.trim();
+  // The last slash, not the first: only the trailing segment is the token, and a
+  // paste with a stray path in it stays invalid rather than being half-fixed.
+  const slash = value.lastIndexOf("/");
+  if (slash === -1) return value;
+  return `${value.slice(0, slash)}/${value.slice(slash + 1).toUpperCase()}`;
+}
+
+/**
+ * The connect string a vault server prints, `IP:PORT/TOKEN`
+ * (docs/decisions/client-backend-embed.md), or its address half alone.
+ *
+ * The token is what authenticates the app to the host's admin port, so it is
+ * part of the address as far as this field is concerned: one paste, one control,
+ * no second box for a secret that arrived on the same line.
+ */
 export function isValidAddress(raw: string): boolean {
   const value = raw.trim();
   if (!value) return false;
-  const colon = value.lastIndexOf(":");
-  const host = colon === -1 ? value : value.slice(0, colon);
-  const port = colon === -1 ? null : value.slice(colon + 1);
+
+  const slash = value.indexOf("/");
+  const authority = slash === -1 ? value : value.slice(0, slash);
+  if (slash !== -1) {
+    const token = value.slice(slash + 1);
+    if (!TOKEN.test(token)) return false;
+  }
+
+  // An IPv6 literal is bracketed precisely so its own colons cannot be read as
+  // the port separator, so the split happens after the closing bracket.
+  const close = authority.lastIndexOf("]");
+  const colon = authority.indexOf(":", close === -1 ? 0 : close);
+  const host = colon === -1 ? authority : authority.slice(0, colon);
+  const port = colon === -1 ? null : authority.slice(colon + 1);
   if (port !== null) {
     if (!PORT.test(port)) return false;
     const n = Number(port);
     if (n < 1 || n > 65535) return false;
   }
-  return IPV4.test(host) || HOSTNAME.test(host);
+  return IPV4.test(host) || IPV6.test(host) || HOSTNAME.test(host);
 }
 
 /** Fades the form out and the confirmation in without the panel resizing abruptly. */
@@ -67,19 +107,27 @@ export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): 
     }
   }
 
-  const valid = isValidAddress(address);
+  // Validated and submitted in the same normalized form the button is gated on,
+  // so a lower-case token can never be rejected by a field that looks enabled.
+  const value = normalizeAddress(address);
+  const valid = isValidAddress(value);
 
   const submit = async () => {
     if (!valid || busy || added) return;
     setBusy(true);
     setError(null);
-    const value = address.trim();
     try {
       await addServer({ name: `Server ${servers.length + 1}`, address: value });
-      setAdded(value);
+      // The confirmation names the host, not the key: the token was a secret one
+      // second ago and leaving it on screen is the one thing this panel can do wrong.
+      const slash = value.indexOf("/");
+      setAdded(slash === -1 ? value : value.slice(0, slash));
       timer.current = setTimeout(onClose, CONFIRM_MS);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not reach that address");
+      // The daemon's own sentence, verbatim: "bad token", "connection refused"
+      // and "not a vault server" are three different things to go and fix, and
+      // one house phrase would hide which of them happened.
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -90,7 +138,9 @@ export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): 
       open={open}
       onClose={onClose}
       title="Setup New Server"
-      description={added ? undefined : "Enter the server's IP address"}
+      description={
+        added ? undefined : "Paste the connect string printed by the vault server (ip:port/KEY)"
+      }
     >
       <AnimatePresence mode="wait" initial={false}>
         {added === null ? (
@@ -102,10 +152,10 @@ export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): 
                 if (error) setError(null);
               }}
               onEnter={() => void submit()}
-              placeholder="192.168.1.24:7447"
+              placeholder="172.26.28.115:8447/K7QF2MXJ4ZB6TDLA"
               inputMode="url"
               autoFocus
-              aria-label="Server IP address"
+              aria-label="Server connect string"
               aria-invalid={error !== null}
             />
             {error ? (

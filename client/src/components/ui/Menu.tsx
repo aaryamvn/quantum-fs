@@ -106,6 +106,12 @@ export interface MenuItemProps {
   /** Shows a check mark on the left when true, and reserves the space when false. */
   checked?: boolean;
   trailing?: ReactNode;
+  /**
+   * A stable id for the row, exposed as `data-menu-item`. Labels are copy and
+   * copy changes; a test or a shortcut that has to find one row needs a handle
+   * that does not.
+   */
+  "data-menu-item"?: string;
 }
 
 export function MenuItem({
@@ -117,6 +123,7 @@ export function MenuItem({
   danger = false,
   checked,
   trailing,
+  "data-menu-item": dataMenuItem,
 }: MenuItemProps) {
   const { close } = useContext(MenuContext);
 
@@ -127,6 +134,7 @@ export function MenuItem({
       type="button"
       role="menuitem"
       tabIndex={-1}
+      data-menu-item={dataMenuItem}
       disabled={disabled}
       aria-disabled={disabled || undefined}
       onClick={() => {

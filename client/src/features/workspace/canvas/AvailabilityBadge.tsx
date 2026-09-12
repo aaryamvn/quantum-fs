@@ -52,7 +52,7 @@ export function AvailabilityBadge({ node, size = 16 }: AvailabilityBadgeProps) {
   }
 
   return (
-    <Tooltip label="Not on this Mac · double-click to download">
+    <Tooltip label="Not on this Mac · double-click to open">
       <span
         data-testid="availability-badge"
         data-availability="remote"

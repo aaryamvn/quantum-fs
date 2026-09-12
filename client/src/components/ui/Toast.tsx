@@ -20,6 +20,14 @@ export interface ToastStackProps {
   toasts: ToastData[];
   onDismiss(id: string): void;
   className?: string;
+  /**
+   * Lets a row grow past one line instead of running off its container. Off by
+   * default: over the canvas a toast has the whole window to be one line in, and
+   * one line is what makes a stack readable. Inside a fixed-width column — the
+   * home list — a sentence the daemon wrote is not bounded by anything, so the
+   * row has to wrap or it leaves the screen.
+   */
+  wrap?: boolean;
 }
 
 /**
@@ -35,8 +43,12 @@ export interface ToastStackProps {
  * lives, when it is auto-dismissed — belongs to the workspace store, because
  * that is what knows whether the work it describes is still happening.
  */
-export function ToastStack({ toasts, onDismiss, className = "" }: ToastStackProps) {
+export function ToastStack({ toasts, onDismiss, className = "", wrap = false }: ToastStackProps) {
   const reduced = useReducedMotion() ?? false;
+
+  // A wrapping row cannot keep a fixed height, so it keeps the same minimum and
+  // pads instead: a one-line toast in a wrapping stack is pixel-identical.
+  const metrics = wrap ? "min-h-[36px] max-w-full py-[8px]" : "h-[36px]";
 
   const enter = reduced
     ? {
@@ -64,10 +76,12 @@ export function ToastStack({ toasts, onDismiss, className = "" }: ToastStackProp
             layout={reduced ? false : "position"}
             {...enter}
             onClick={() => onDismiss(toast.id)}
-            className="pointer-events-auto flex h-[36px] items-center gap-[10px] rounded-[10px] border border-line-strong bg-surface-2 px-[12px] text-[13px] text-fg shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
+            className={`pointer-events-auto flex ${metrics} items-center gap-[10px] rounded-[10px] border border-line-strong bg-surface-2 px-[12px] text-[13px] text-fg shadow-[0_12px_32px_rgba(0,0,0,0.5)]`}
           >
             <ToastIcon kind={toast.kind} />
-            <span className="whitespace-nowrap">{toast.text}</span>
+            <span className={wrap ? "min-w-0 leading-[18px]" : "whitespace-nowrap"}>
+              {toast.text}
+            </span>
             {toast.action ? (
               <button
                 type="button"
@@ -91,10 +105,18 @@ export function ToastStack({ toasts, onDismiss, className = "" }: ToastStackProp
 /** One line of color is the whole difference between the three kinds. */
 function ToastIcon({ kind }: { kind: ToastKind }) {
   if (kind === "success") {
-    return <Check size={14} strokeWidth={1.75} style={{ color: SUCCESS }} aria-hidden />;
+    return (
+      <Check
+        size={14}
+        strokeWidth={1.75}
+        className="shrink-0"
+        style={{ color: SUCCESS }}
+        aria-hidden
+      />
+    );
   }
   if (kind === "error") {
-    return <AlertCircle size={14} strokeWidth={1.75} className="text-coral" aria-hidden />;
+    return <AlertCircle size={14} strokeWidth={1.75} className="shrink-0 text-coral" aria-hidden />;
   }
-  return <Info size={14} strokeWidth={1.75} className="text-fg-3" aria-hidden />;
+  return <Info size={14} strokeWidth={1.75} className="shrink-0 text-fg-3" aria-hidden />;
 }

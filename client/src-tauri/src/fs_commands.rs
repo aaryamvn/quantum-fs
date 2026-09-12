@@ -1,537 +1,323 @@
 //! The command surface the webview calls: one `#[tauri::command]` per `BackendClient` method.
 //!
 //! WHY the shape is so uniform: `client/src/lib/backend/tauri.ts` is a thin `invoke` per method,
-//! so every behavioral rule lives here or in [`crate::fs_state`], never in the UI. Each mutation
-//! does the same three steps — lock, mutate, drop the guard, *then* emit — because a listener that
-//! calls straight back into a command while the mutex is still held would deadlock the app.
+//! so every behavioral rule lives in the embedded node (`src/node/`), never in the UI and no longer
+//! in this file. Each command is one `await` into that runtime, which owns the replica, the host
+//! connections and the identities (docs/decisions/client-backend-embed.md).
+//!
+//! Nothing here emits: the node pushes `backend://` events itself, off its own heartbeat, so a
+//! change another member made reaches the webview without any command having been called.
 //!
 //! Search is deliberately absent: it runs client-side over the loaded tree in both runtimes
 //! (docs/decisions/client-workspace.md), so there is nothing to mirror here.
 
-use std::sync::MutexGuard;
-use std::thread;
-use std::time::Duration;
+use std::path::PathBuf;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::State;
 
-use crate::bridge::{BridgeState, Server};
-use crate::fs_state::{FsDb, FsState};
+use crate::node::Node;
 use crate::fs_types::{
-    AgentReply, AskAgentInput, CreateNodeInput, DeleteNodesInput, DuplicateNodesInput, FsChange,
-    FsChangedPayload, FsNode, HistoryEvent, Member, MemberRole, MoveNodesInput, NodeAccess,
-    PeerPresence, PresenceInput, PresencePayload, Recent, RenameNodeInput, SetAccessInput,
-    SetNodeColorInput, VaultIdPayload, VaultMeta, VaultMetaPatch,
+    AgentReply, AskAgentInput, CreateNodeInput, DeleteNodesInput, DuplicateNodesInput, FsNode,
+    HistoryEvent, ImportFilesInput, Member, MemberRole, MoveNodesInput, NodeAccess, PeerPresence,
+    PresenceInput, Recent, RenameNodeInput, SetAccessInput, SetNodeColorInput, VaultMeta,
+    VaultMetaPatch,
 };
 
-/// Deltas of one mutation, plus the member who caused them.
-const FS_CHANGED: &str = "backend://fs-changed";
-/// A vault's member list changed (role, removal).
-const MEMBERS_CHANGED: &str = "backend://members-changed";
-/// A vault's settings changed (name, description, join code, cleanup).
-const VAULT_CHANGED: &str = "backend://vault-changed";
-/// The recents list changed.
-const RECENTS_CHANGED: &str = "backend://recents-changed";
-/// One peer published presence; the payload carries the vault's whole peer list.
-const PRESENCE: &str = "backend://presence";
-/// The server/vault list changed — same event `bridge.rs` emits, since it is the same list.
-const SERVERS_CHANGED: &str = "backend://servers-changed";
-
-/// One tick of a simulated transfer; 100ms is the smallest step the progress ring can show.
-const DOWNLOAD_TICK_MS: u64 = 100;
-/// Long enough for the agent bar's typing indicator to read as thinking, short enough to not annoy.
-const AGENT_LATENCY_MS: u64 = 650;
-
-fn fs<'a>(state: &'a State<'_, FsState>) -> MutexGuard<'a, FsDb> {
-    state.0.lock().expect("fs state poisoned")
-}
-
-fn bridge<'a>(state: &'a State<'_, BridgeState>) -> MutexGuard<'a, Vec<Server>> {
-    state.0.lock().expect("bridge state poisoned")
-}
-
-/// A failed emit means the window is gone; the next mount re-reads state anyway.
-fn emit_fs(app: &AppHandle, vault_id: &str, changes: Vec<FsChange>, actor: &str) {
-    if changes.is_empty() {
-        return;
-    }
-    let _ = app.emit(
-        FS_CHANGED,
-        FsChangedPayload {
-            vault_id: vault_id.to_string(),
-            changes,
-            actor: actor.to_string(),
-        },
-    );
-}
-
-fn emit_vault(app: &AppHandle, event: &str, vault_id: &str) {
-    let _ = app.emit(
-        event,
-        VaultIdPayload {
-            vault_id: vault_id.to_string(),
-        },
-    );
-}
-
-/// Push a vault's name/server/member count into the server list `bridge.rs` owns.
-/// Returns whether anything actually moved, so we only emit when the sidebar must redraw.
-fn sync_vault_into_bridge(servers: &mut [Server], meta: &VaultMeta, member_count: u32) -> bool {
-    let mut found: Option<(usize, usize)> = None;
-    for (si, server) in servers.iter().enumerate() {
-        if let Some(vi) = server.vaults.iter().position(|v| v.id == meta.id) {
-            found = Some((si, vi));
-            break;
-        }
-    }
-    let Some((si, vi)) = found else {
-        return false;
-    };
-    let target = servers.iter().position(|s| s.id == meta.server_id);
-
-    // Moving a vault between servers: take it off the old one, hand it to the new one.
-    if let Some(ti) = target {
-        if ti != si {
-            let mut vault = servers[si].vaults.remove(vi);
-            vault.server_id = meta.server_id.clone();
-            vault.name = meta.name.clone();
-            vault.member_count = member_count;
-            servers[ti].vaults.push(vault);
-            return true;
-        }
-    }
-
-    let vault = &mut servers[si].vaults[vi];
-    let mut changed = false;
-    if vault.name != meta.name {
-        vault.name = meta.name.clone();
-        changed = true;
-    }
-    if vault.member_count != member_count {
-        vault.member_count = member_count;
-        changed = true;
-    }
-    changed
-}
-
-fn set_bridge_member_count(servers: &mut [Server], vault_id: &str, count: u32) -> bool {
-    for server in servers.iter_mut() {
-        for vault in server.vaults.iter_mut() {
-            if vault.id == vault_id {
-                if vault.member_count == count {
-                    return false;
-                }
-                vault.member_count = count;
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn drop_vault_from_bridge(servers: &mut [Server], vault_id: &str) -> bool {
-    let mut changed = false;
-    for server in servers.iter_mut() {
-        let before = server.vaults.len();
-        server.vaults.retain(|v| v.id != vault_id);
-        if server.vaults.len() != before {
-            changed = true;
-        }
-    }
-    changed
-}
+/// The OS file picker, as AppleScript. `choose file` returns aliases, so the POSIX paths are
+/// assembled one per line — the only shape a shell round trip can carry back losslessly.
+#[cfg(target_os = "macos")]
+const CHOOSE_FILES_SCRIPT: &str = "set fs to choose file with multiple selections allowed with prompt \"Import into QuantumFS\"\nset out to \"\"\nrepeat with f in fs\nset out to out & POSIX path of f & linefeed\nend repeat\nreturn out";
 
 /* -------------------------------------------------------------------- reads */
 
 #[tauri::command]
-pub fn me(state: State<'_, FsState>) -> Result<Member, String> {
-    fs(&state).me()
+pub async fn me(node: State<'_, Node>) -> Result<Member, String> {
+    node.me().await
 }
 
 #[tauri::command]
-pub fn list_tree(state: State<'_, FsState>, vault_id: String) -> Vec<FsNode> {
-    fs(&state).list_tree(&vault_id)
+pub async fn list_tree(node: State<'_, Node>, vault_id: String) -> Result<Vec<FsNode>, String> {
+    node.list_tree(vault_id).await
 }
 
 #[tauri::command]
-pub fn read_text_preview(
-    state: State<'_, FsState>,
+pub async fn read_text_preview(
+    node: State<'_, Node>,
     vault_id: String,
     node_id: String,
     max_bytes: usize,
-) -> Option<String> {
-    let _ = vault_id;
-    fs(&state).preview(&node_id, max_bytes)
+) -> Result<Option<String>, String> {
+    node.read_text_preview(vault_id, node_id, max_bytes).await
 }
 
 #[tauri::command]
-pub fn get_access(
-    state: State<'_, FsState>,
+pub async fn get_access(
+    node: State<'_, Node>,
     vault_id: String,
     node_id: String,
 ) -> Result<NodeAccess, String> {
-    let _ = vault_id;
-    fs(&state).get_access(&node_id)
+    node.get_access(vault_id, node_id).await
 }
 
 #[tauri::command]
-pub fn get_history(
-    state: State<'_, FsState>,
+pub async fn get_history(
+    node: State<'_, Node>,
     vault_id: String,
     node_id: String,
-) -> Vec<HistoryEvent> {
-    fs(&state).get_history(&vault_id, &node_id)
+) -> Result<Vec<HistoryEvent>, String> {
+    node.get_history(vault_id, node_id).await
 }
 
 #[tauri::command]
-pub fn list_recents(state: State<'_, FsState>) -> Vec<Recent> {
-    fs(&state).list_recents()
+pub async fn list_recents(node: State<'_, Node>) -> Result<Vec<Recent>, String> {
+    node.list_recents().await
 }
 
 #[tauri::command]
-pub fn get_vault_meta(state: State<'_, FsState>, vault_id: String) -> Result<VaultMeta, String> {
-    fs(&state).get_vault_meta(&vault_id)
+pub async fn get_vault_meta(
+    node: State<'_, Node>,
+    vault_id: String,
+) -> Result<VaultMeta, String> {
+    node.get_vault_meta(vault_id).await
 }
 
 #[tauri::command]
-pub fn list_members(state: State<'_, FsState>, vault_id: String) -> Vec<Member> {
-    fs(&state).list_members(&vault_id)
+pub async fn list_members(node: State<'_, Node>, vault_id: String) -> Result<Vec<Member>, String> {
+    node.list_members(vault_id).await
 }
 
 #[tauri::command]
-pub fn get_presence(state: State<'_, FsState>, vault_id: String) -> Vec<PeerPresence> {
-    fs(&state).get_presence(&vault_id)
+pub async fn get_presence(
+    node: State<'_, Node>,
+    vault_id: String,
+) -> Result<Vec<PeerPresence>, String> {
+    node.get_presence(vault_id).await
 }
 
 /* ---------------------------------------------------------------- tree ops */
 
 #[tauri::command]
-pub fn create_node(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn create_node(
+    node: State<'_, Node>,
     input: CreateNodeInput,
 ) -> Result<FsNode, String> {
-    let vault_id = input.vault_id.clone();
-    let actor_hint = input.actor.clone();
-    let (node, changes, actor) = {
-        let mut db = fs(&state);
-        let actor = actor_hint.unwrap_or_else(|| db.self_id());
-        let (node, changes) = db.create_node(input)?;
-        (node, changes, actor)
-    };
-    emit_fs(&app, &vault_id, changes, &actor);
-    Ok(node)
+    node.create_node(input).await
 }
 
 #[tauri::command]
-pub fn rename_node(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn rename_node(
+    node: State<'_, Node>,
     input: RenameNodeInput,
 ) -> Result<FsNode, String> {
-    let vault_id = input.vault_id.clone();
-    let actor_hint = input.actor.clone();
-    let (node, changes, actor) = {
-        let mut db = fs(&state);
-        let actor = actor_hint.unwrap_or_else(|| db.self_id());
-        let (node, changes) = db.rename_node(input)?;
-        (node, changes, actor)
-    };
-    emit_fs(&app, &vault_id, changes, &actor);
-    Ok(node)
+    node.rename_node(input).await
 }
 
 #[tauri::command]
-pub fn move_nodes(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn move_nodes(
+    node: State<'_, Node>,
     input: MoveNodesInput,
 ) -> Result<Vec<FsNode>, String> {
-    let vault_id = input.vault_id.clone();
-    let actor_hint = input.actor.clone();
-    let (nodes, changes, actor) = {
-        let mut db = fs(&state);
-        let actor = actor_hint.unwrap_or_else(|| db.self_id());
-        let (nodes, changes) = db.move_nodes(input)?;
-        (nodes, changes, actor)
-    };
-    emit_fs(&app, &vault_id, changes, &actor);
-    Ok(nodes)
+    node.move_nodes(input).await
 }
 
 #[tauri::command]
-pub fn delete_nodes(
-    app: AppHandle,
-    state: State<'_, FsState>,
-    input: DeleteNodesInput,
-) -> Result<(), String> {
-    let vault_id = input.vault_id.clone();
-    let actor_hint = input.actor.clone();
-    let (changes, recents_changed, actor) = {
-        let mut db = fs(&state);
-        let actor = actor_hint.unwrap_or_else(|| db.self_id());
-        let (changes, recents_changed) = db.delete_nodes(input)?;
-        (changes, recents_changed, actor)
-    };
-    emit_fs(&app, &vault_id, changes, &actor);
-    if recents_changed {
-        let _ = app.emit(RECENTS_CHANGED, ());
-    }
-    Ok(())
+pub async fn delete_nodes(node: State<'_, Node>, input: DeleteNodesInput) -> Result<(), String> {
+    node.delete_nodes(input).await
 }
 
 #[tauri::command]
-pub fn duplicate_nodes(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn duplicate_nodes(
+    node: State<'_, Node>,
     input: DuplicateNodesInput,
 ) -> Result<Vec<FsNode>, String> {
-    let vault_id = input.vault_id.clone();
-    let actor_hint = input.actor.clone();
-    let (nodes, changes, actor) = {
-        let mut db = fs(&state);
-        let actor = actor_hint.unwrap_or_else(|| db.self_id());
-        let (nodes, changes) = db.duplicate_nodes(input)?;
-        (nodes, changes, actor)
-    };
-    emit_fs(&app, &vault_id, changes, &actor);
-    Ok(nodes)
+    node.duplicate_nodes(input).await
 }
 
 #[tauri::command]
-pub fn set_node_color(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn set_node_color(
+    node: State<'_, Node>,
     input: SetNodeColorInput,
 ) -> Result<FsNode, String> {
-    let vault_id = input.vault_id.clone();
-    let actor_hint = input.actor.clone();
-    let (node, changes, actor) = {
-        let mut db = fs(&state);
-        let actor = actor_hint.unwrap_or_else(|| db.self_id());
-        let (node, changes) = db.set_node_color(input)?;
-        (node, changes, actor)
-    };
-    emit_fs(&app, &vault_id, changes, &actor);
-    Ok(node)
+    node.set_node_color(input).await
 }
 
-/// Start a simulated transfer of a remote file and return immediately; progress arrives
-/// as `fs-changed` upserts from a ticker thread, exactly as a real fetch would report it.
+/// Start pulling a remote file and return at once; progress arrives as `fs-changed`
+/// upserts from the node's heartbeat, so the UI never polls.
 #[tauri::command]
-pub fn request_download(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn request_download(
+    node: State<'_, Node>,
     vault_id: String,
     node_id: String,
 ) -> Result<(), String> {
-    let (started, actor) = {
-        let mut db = fs(&state);
-        let actor = db.self_id();
-        (db.begin_download(&node_id)?, actor)
-    };
-    let Some((change, duration)) = started else {
-        return Ok(());
-    };
-    emit_fs(&app, &vault_id, vec![change], &actor);
+    node.request_download(vault_id, node_id).await
+}
 
-    let handle = app.clone();
-    let step = DOWNLOAD_TICK_MS as f64 / duration;
-    thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_millis(DOWNLOAD_TICK_MS));
-            // Lock, advance, drop — never emit while the mutex is held.
-            let tick = {
-                let state = handle.state::<FsState>();
-                let mut db = state.0.lock().expect("fs state poisoned");
-                db.tick_download(&node_id, step)
-            };
-            // The node was deleted (or someone else finished it) while we were sleeping.
-            let Some((change, done)) = tick else {
-                break;
-            };
-            emit_fs(&handle, &vault_id, vec![change], &actor);
-            if done {
-                break;
-            }
+/// Assemble a file's bytes if they are not local yet, then hand the copy to the OS
+/// default application for its type.
+#[tauri::command]
+pub async fn open_node(
+    node: State<'_, Node>,
+    vault_id: String,
+    node_id: String,
+) -> Result<(), String> {
+    node.open_node(vault_id, node_id).await
+}
+
+/// Copy files from the OS into a vault folder.
+///
+/// `input.paths` absent means the user has not chosen yet, so the native picker runs here rather
+/// than in the webview: the drag-and-drop plugin is off (`dragDropEnabled: false`) and a webview
+/// `<input type=file>` would hand us bytes instead of paths, which for multi-gigabyte imports is
+/// the difference between a copy and a second copy through IPC. Cancelling is not an error — the
+/// chooser reports error -128 and the import resolves as an empty list, so the UI shows nothing;
+/// any other chooser failure surfaces as an error instead of a silent no-op.
+#[tauri::command]
+pub async fn import_files(
+    node: State<'_, Node>,
+    input: ImportFilesInput,
+) -> Result<Vec<FsNode>, String> {
+    let paths: Vec<PathBuf> = match input.paths {
+        Some(given) => given.into_iter().map(PathBuf::from).collect(),
+        None => match choose_files().await? {
+            Some(chosen) => chosen,
+            None => return Ok(Vec::new()),
+        },
+    };
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    node.import_files(input.vault_id, input.parent_id, paths).await
+}
+
+/// The native multi-file chooser. `None` = the user cancelled.
+#[cfg(target_os = "macos")]
+async fn choose_files() -> Result<Option<Vec<PathBuf>>, String> {
+    use std::process::Command;
+
+    // `osascript` blocks for as long as the sheet is up, which is unbounded: it must not sit on
+    // an async worker that other commands are waiting for.
+    let output = tauri::async_runtime::spawn_blocking(|| {
+        Command::new("osascript").arg("-e").arg(CHOOSE_FILES_SCRIPT).output()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("Couldn't open the file chooser: {e}"))?;
+
+    // A cancel is error -128 ("User canceled"). The exit code alone cannot be trusted for it —
+    // osascript reports 1 for any script error — so a non-zero exit without -128 in stderr is a
+    // real failure and its message is worth surfacing rather than swallowing as "nothing chosen".
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("-128") {
+            return Ok(None);
         }
-    });
-    Ok(())
+        return Err(format!("Couldn't open the file chooser: {}", stderr.trim()));
+    }
+    Ok(Some(parse_chosen_paths(&String::from_utf8_lossy(&output.stdout))))
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn choose_files() -> Result<Option<Vec<PathBuf>>, String> {
+    Err("Choosing files isn't supported on this platform yet".to_string())
+}
+
+/// One POSIX path per line; blank lines are the trailing linefeed the script always adds.
+///
+/// Only the line ending is stripped, never surrounding whitespace: a basename may legally begin or
+/// end with a space, and trimming it would hand `import_files` a path that does not exist.
+#[cfg(target_os = "macos")]
+fn parse_chosen_paths(stdout: &str) -> Vec<PathBuf> {
+    stdout
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 /* ------------------------------------------------------------ access/history */
 
-/// A permission change is not an edit, so `modifiedAt` stays put — but the node still goes
-/// out as an upsert, because the inspector reads its access badge from the tree.
 #[tauri::command]
-pub fn set_access(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn set_access(
+    node: State<'_, Node>,
     input: SetAccessInput,
 ) -> Result<NodeAccess, String> {
-    let vault_id = input.vault_id.clone();
-    let (access, changes, actor) = {
-        let mut db = fs(&state);
-        let actor = db.self_id();
-        let (access, changes) = db.set_access(input)?;
-        (access, changes, actor)
-    };
-    emit_fs(&app, &vault_id, changes, &actor);
-    Ok(access)
+    node.set_access(input).await
 }
 
 #[tauri::command]
-pub fn touch_recent(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn touch_recent(
+    node: State<'_, Node>,
     vault_id: String,
     node_id: String,
 ) -> Result<(), String> {
-    fs(&state).touch_recent(&vault_id, &node_id);
-    let _ = app.emit(RECENTS_CHANGED, ());
-    Ok(())
+    node.touch_recent(vault_id, node_id).await
 }
 
 /* ------------------------------------------------------------------ vaults */
 
 #[tauri::command]
-pub fn update_vault_meta(
-    app: AppHandle,
-    state: State<'_, FsState>,
-    bridge_state: State<'_, BridgeState>,
+pub async fn update_vault_meta(
+    node: State<'_, Node>,
     vault_id: String,
     patch: VaultMetaPatch,
 ) -> Result<VaultMeta, String> {
-    // The vault row lives in `bridge.rs`'s list, so a server move has to be validated
-    // against it before the settings are written; the ids are read under their own lock.
-    let known: Vec<String> = bridge(&bridge_state).iter().map(|s| s.id.clone()).collect();
-    let (update, members, actor) = {
-        let mut db = fs(&state);
-        let actor = db.self_id();
-        let update = db.update_vault_meta(&vault_id, patch, &known)?;
-        let members = db.member_count(&vault_id);
-        (update, members, actor)
-    };
-    if update.renamed || update.rehomed {
-        let mut servers = bridge(&bridge_state);
-        sync_vault_into_bridge(&mut servers, &update.meta, members);
-    }
-
-    emit_fs(&app, &vault_id, update.changes, &actor);
-    emit_vault(&app, VAULT_CHANGED, &vault_id);
-    if update.renamed || update.rehomed {
-        let _ = app.emit(SERVERS_CHANGED, ());
-    }
-    Ok(update.meta)
+    node.update_vault_meta(vault_id, patch).await
 }
 
 #[tauri::command]
-pub fn rotate_join_code(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn rotate_join_code(
+    node: State<'_, Node>,
     vault_id: String,
 ) -> Result<String, String> {
-    let code = fs(&state).rotate_join_code(&vault_id)?;
-    emit_vault(&app, VAULT_CHANGED, &vault_id);
-    Ok(code)
+    node.rotate_join_code(vault_id).await
 }
 
 #[tauri::command]
-pub fn set_member_role(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn set_member_role(
+    node: State<'_, Node>,
     vault_id: String,
     peer_id: String,
     role: MemberRole,
 ) -> Result<Member, String> {
-    let member = fs(&state).set_member_role(&vault_id, &peer_id, role)?;
-    emit_vault(&app, MEMBERS_CHANGED, &vault_id);
-    let _ = app.emit(SERVERS_CHANGED, ());
-    Ok(member)
+    node.set_member_role(vault_id, peer_id, role).await
 }
 
 #[tauri::command]
-pub fn remove_member(
-    app: AppHandle,
-    state: State<'_, FsState>,
-    bridge_state: State<'_, BridgeState>,
+pub async fn remove_member(
+    node: State<'_, Node>,
     vault_id: String,
     peer_id: String,
 ) -> Result<(), String> {
-    let (remaining, peers) = {
-        let mut db = fs(&state);
-        let remaining = db.remove_member(&vault_id, &peer_id)?;
-        (remaining, db.get_presence(&vault_id))
-    };
-    {
-        let mut servers = bridge(&bridge_state);
-        set_bridge_member_count(&mut servers, &vault_id, remaining);
-    }
-    emit_vault(&app, MEMBERS_CHANGED, &vault_id);
-    let _ = app.emit(SERVERS_CHANGED, ());
-    let _ = app.emit(
-        PRESENCE,
-        PresencePayload {
-            vault_id: vault_id.clone(),
-            peers,
-        },
-    );
-    Ok(())
+    node.remove_member(vault_id, peer_id).await
 }
 
 #[tauri::command]
-pub fn delete_vault(
-    app: AppHandle,
-    state: State<'_, FsState>,
-    bridge_state: State<'_, BridgeState>,
-    vault_id: String,
-) -> Result<(), String> {
-    fs(&state).delete_vault(&vault_id)?;
-    {
-        let mut servers = bridge(&bridge_state);
-        drop_vault_from_bridge(&mut servers, &vault_id);
-    }
-    let _ = app.emit(SERVERS_CHANGED, ());
-    Ok(())
+pub async fn delete_vault(node: State<'_, Node>, vault_id: String) -> Result<(), String> {
+    node.delete_vault(vault_id).await
 }
 
 #[tauri::command]
-pub fn leave_vault(
-    app: AppHandle,
-    state: State<'_, FsState>,
-    bridge_state: State<'_, BridgeState>,
-    vault_id: String,
-) -> Result<(), String> {
-    fs(&state).leave_vault(&vault_id)?;
-    {
-        let mut servers = bridge(&bridge_state);
-        drop_vault_from_bridge(&mut servers, &vault_id);
-    }
-    let _ = app.emit(SERVERS_CHANGED, ());
-    Ok(())
+pub async fn leave_vault(node: State<'_, Node>, vault_id: String) -> Result<(), String> {
+    node.leave_vault(vault_id).await
 }
 
 /* ---------------------------------------------------------------- presence */
 
 #[tauri::command]
-pub fn publish_presence(
-    app: AppHandle,
-    state: State<'_, FsState>,
+pub async fn publish_presence(
+    node: State<'_, Node>,
     input: PresenceInput,
 ) -> Result<(), String> {
-    let vault_id = input.vault_id.clone();
-    let peers = fs(&state).publish_presence(input);
-    let _ = app.emit(PRESENCE, PresencePayload { vault_id, peers });
-    Ok(())
+    node.publish_presence(input).await
 }
 
 /* ------------------------------------------------------------------- agent */
 
-/// Canned answer for the agent bar. `async` so the deliberate think-time never blocks
-/// the main thread, and the lock is taken only after the sleep.
-#[tauri::command(async)]
-pub fn ask_agent(state: State<'_, FsState>, input: AskAgentInput) -> Result<AgentReply, String> {
-    // Deliberate think-time, taken before the lock so no other command waits on it.
-    thread::sleep(Duration::from_millis(AGENT_LATENCY_MS));
-    let (id, text) = fs(&state).agent_reply(&input.folder_id)?;
-    Ok(AgentReply { id, text })
+#[tauri::command]
+pub async fn ask_agent(
+    node: State<'_, Node>,
+    input: AskAgentInput,
+) -> Result<AgentReply, String> {
+    node.ask_agent(input).await
 }

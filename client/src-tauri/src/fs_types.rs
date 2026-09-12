@@ -7,6 +7,10 @@
 //! These types are also the seed format: `src/lib/backend/seed/fs.json` is generated once by
 //! `client/scripts/seed-fs.mjs` and read by both runtimes, so the two builds can never drift.
 
+//! The vocabulary is shared with the node runtime (`src/node/`), so a type or a field that no
+//! command happens to read is still part of the contract, not dead weight.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -91,6 +95,68 @@ pub enum HistoryKind {
     Access,
     Deleted,
     Downloaded,
+}
+
+/* ---------------------------------------------------- servers and vaults */
+
+/// The caller's standing in a vault, as the home screen draws it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Owner,
+    Member,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Vault {
+    pub id: String,
+    pub server_id: String,
+    pub name: String,
+    pub member_count: u32,
+    /// Bytes used by the vault's files. Always <= `quota_bytes`.
+    pub used_bytes: u64,
+    /// Bytes of the server's capacity allocated to this vault.
+    pub quota_bytes: u64,
+    pub role: Role,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Server {
+    pub id: String,
+    pub name: String,
+    pub address: String,
+    pub peer_id: String,
+    pub online: bool,
+    /// Total provisionable storage on the server; the sum of vault quotas cannot exceed it.
+    pub capacity_bytes: u64,
+    pub vaults: Vec<Vault>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonStatus {
+    pub running: bool,
+    pub version: Option<String>,
+    pub peer_id: Option<String>,
+    pub data_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddServerInput {
+    pub name: String,
+    pub address: String,
+}
+
+/// Arguments for creating a vault: a name plus the slice of server capacity it gets.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateVaultInput {
+    pub server_id: String,
+    pub name: String,
+    pub quota_bytes: u64,
 }
 
 /* ------------------------------------------------------------------ nodes */
@@ -400,6 +466,16 @@ pub struct AskAgentInput {
     pub prompt: String,
 }
 
+/// Import OS files into a vault folder. `paths` absent = ask the OS for a file selection.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFilesInput {
+    pub vault_id: String,
+    pub parent_id: String,
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
+}
+
 /* --------------------------------------------------------- event payloads */
 
 /// Body of `backend://fs-changed`: the deltas one mutation produced, and who caused them.
@@ -424,6 +500,14 @@ pub struct VaultIdPayload {
 pub struct PresencePayload {
     pub vault_id: String,
     pub peers: Vec<PeerPresence>,
+}
+
+/// Body of `backend://vault-removed`: a vault the client no longer has, and why.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultRemovedPayload {
+    pub vault_id: String,
+    pub reason: String,
 }
 
 /* ------------------------------------------------------------------- seed */

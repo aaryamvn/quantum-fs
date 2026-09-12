@@ -301,6 +301,7 @@ impl HostService {
             .copied()
             .map(|peer| Ok((peer, self.keys.owns_live_gate(peer, self.state.gate_owner)?)))
             .collect::<Result<_>>()?;
+        let id_before = self.state.next_control;
         let mut transaction = Self {
             keys: self.keys.clone(),
             state: self.stage_state()?,
@@ -310,6 +311,8 @@ impl HostService {
             defer_persistence: true,
             admission_path: self.admission_path.clone(),
             disconnects: Vec::new(),
+            recent_ops: VecDeque::new(),
+            last_seen: BTreeMap::new(),
         };
         let prepared = (|| -> Result<()> {
             {
@@ -334,6 +337,12 @@ impl HostService {
                     self.keys
                         .unblock_live_traffic(peer, self.state.gate_owner)?;
                 }
+            }
+        } else {
+            // The staged transaction published the record ids; mirror them into
+            // the operator ring now that the snapshot is durable.
+            for id in id_before..self.state.next_control {
+                self.note_recent_op(sender, id);
             }
         }
         prepared

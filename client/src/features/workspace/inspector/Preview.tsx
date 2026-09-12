@@ -36,6 +36,7 @@ export function Preview({ node }: PreviewProps) {
   const client = useWorkspace((s) => s.client);
   const reduced = useReducedMotion() ?? false;
   const [text, setText] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
 
   const isFolder = node.kind === "folder";
   const hue = isFolder
@@ -47,15 +48,21 @@ export function Preview({ node }: PreviewProps) {
 
   useEffect(() => {
     setText(null);
+    setReading(false);
     if (!client || !previewable) return;
 
     let live = true;
+    setReading(true);
     void client.readTextPreview(node.vaultId, node.id, PREVIEW_BYTES).then(
       (value) => {
-        if (live) setText(value);
+        if (!live) return;
+        setText(value);
+        setReading(false);
       },
       () => {
-        if (live) setText(null);
+        if (!live) return;
+        setText(null);
+        setReading(false);
       },
     );
     return () => {
@@ -81,6 +88,14 @@ export function Preview({ node }: PreviewProps) {
           )}
         </div>
       </div>
+
+      {reading ? (
+        /* The bytes may have to be pulled from another peer before they can be
+           read, so the wait is named rather than left as a gap under the icon. */
+        <p data-testid="inspector-preview-loading" className="mt-[10px] text-[11.5px] leading-[16px] text-fg-3">
+          Loading preview…
+        </p>
+      ) : null}
 
       {text !== null && text !== "" ? (
         <motion.pre

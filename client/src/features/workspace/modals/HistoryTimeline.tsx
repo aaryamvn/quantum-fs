@@ -20,6 +20,7 @@ import type { HistoryEvent, HistoryKind, Member, PeerId } from "@/lib/backend";
 import { formatDateTime, formatDayHeading } from "@/lib/time";
 
 import { EASE } from "../layout";
+import { actorLabel } from "../store";
 
 /** Per-row entrance delay. Fast enough to read as one wave, slow enough to see direction. */
 const STAGGER = 0.025;
@@ -124,7 +125,8 @@ export function HistoryTimeline({ events, members }: HistoryTimelineProps) {
             {group.events.map((event) => {
               index += 1;
               const Glyph = GLYPHS[event.kind];
-              const member = byPeer.get(event.by);
+              const member = event.by ? byPeer.get(event.by) : undefined;
+              const actor = actorLabel(member);
               const paired = PAIRED.has(event.kind) && event.from !== null && event.to !== null;
               const entrance = reduced
                 ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0 } }
@@ -153,15 +155,15 @@ export function HistoryTimeline({ events, members }: HistoryTimelineProps) {
 
                   <Avatar
                     peerId={event.by}
-                    name={member?.name ?? "Unknown"}
-                    initials={member?.initials}
+                    name={actor.name}
+                    initials={actor.initials}
                     size={18}
                     className="mt-[1px]"
                   />
 
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] leading-[18px] text-fg-2" data-selectable>
-                      <span className="text-fg">{member?.name ?? "Unknown"}</span>{" "}
+                      <span className="text-fg">{actor.name}</span>{" "}
                       {event.summary}
                     </p>
                     {paired ? (

@@ -46,6 +46,8 @@ export function AccessSummary({ node }: AccessSummaryProps) {
   const isCreator = useIsCreator(node.id);
 
   const [access, setAccess] = useState<NodeAccess | null>(null);
+  /** Null until the first reply lands: "no explicit list" and "no answer yet" are not the same fact. */
+  const [pending, setPending] = useState(true);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -55,14 +57,26 @@ export function AccessSummary({ node }: AccessSummaryProps) {
   }, []);
 
   useEffect(() => {
-    if (!client) return;
+    if (!client) {
+      // No client is no read, so there is no reply to wait for: leaving `pending`
+      // set here would hold the line on "Checking access…" for as long as the
+      // panel is open. Cleared with it, so nothing from a previous node stands.
+      setAccess(null);
+      setPending(false);
+      return;
+    }
     let live = true;
+    setPending(true);
     void client.getAccess(node.vaultId, node.id).then(
       (value) => {
-        if (live) setAccess(value);
+        if (!live) return;
+        setAccess(value);
+        setPending(false);
       },
       () => {
-        if (live) setAccess(null);
+        if (!live) return;
+        setAccess(null);
+        setPending(false);
       },
     );
     return () => {
@@ -73,21 +87,27 @@ export function AccessSummary({ node }: AccessSummaryProps) {
   const entries = access?.entries ?? [];
   const explicit = entries.length > 0;
 
-  // No explicit list anywhere up the chain means the vault default: everyone edits.
-  const faces: Member[] = explicit
-    ? entries
-        .map((entry) => members.find((member) => member.peerId === entry.peerId))
-        .filter((member): member is Member => member !== undefined)
-    : members;
+  // No explicit list anywhere up the chain means the vault default: everyone
+  // edits — but only once the daemon has actually said so. Claiming it while the
+  // read is out would be the panel guessing the most permissive answer there is.
+  const faces: Member[] = pending
+    ? []
+    : explicit
+      ? entries
+          .map((entry) => members.find((member) => member.peerId === entry.peerId))
+          .filter((member): member is Member => member !== undefined)
+      : members;
 
   const editors = entries.filter((entry) => entry.level === "editor").length;
   const viewers = entries.length - editors;
-  const summary = explicit
-    ? `${plural(editors, "editor", "editors")} · ${plural(viewers, "viewer", "viewers")}`
-    : "Everyone can edit";
+  const summary = pending
+    ? "Checking access…"
+    : explicit
+      ? `${plural(editors, "editor", "editors")} · ${plural(viewers, "viewer", "viewers")}`
+      : "Everyone can edit";
 
   const inheritedFrom =
-    access?.inherit && explicit
+    !pending && access?.inherit && explicit
       ? (node.parentId ? nodes[node.parentId]?.name : undefined) ?? vaultName
       : null;
 

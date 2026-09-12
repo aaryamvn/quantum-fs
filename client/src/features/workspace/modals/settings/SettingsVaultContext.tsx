@@ -9,6 +9,8 @@ export interface SettingsVault {
   vaultId: VaultId | null;
   meta: VaultMeta | null;
   members: Member[];
+  /** True while a read for this vault is in flight, so a pane can draw a placeholder. */
+  loading: boolean;
   /** True when this vault is also the one the workspace has open behind the dialog. */
   isOpenVault: boolean;
   /** Admin of *this* vault — a role is per vault, so the store's `me` is not the answer. */
@@ -21,6 +23,7 @@ const EMPTY: SettingsVault = {
   vaultId: null,
   meta: null,
   members: [],
+  loading: false,
   isOpenVault: false,
   isAdmin: false,
   refresh: async () => {},
@@ -69,17 +72,24 @@ export function SettingsVaultProvider({ vaultId, open, children }: SettingsVault
 
   const [meta, setMeta] = useState<VaultMeta | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [loading, setLoading] = useState(false);
   // The last vault asked for, so a slow answer for a vault the dialog has since
   // left cannot overwrite the one it is now showing.
   const wanted = useRef<VaultId | null>(null);
 
   const load = useCallback(async () => {
     if (isOpenVault) {
-      await Promise.all([refreshVaultMeta(), refreshMembers()]);
+      setLoading(true);
+      try {
+        await Promise.all([refreshVaultMeta(), refreshMembers()]);
+      } finally {
+        setLoading(false);
+      }
       return;
     }
     if (!client || vaultId === null) return;
     wanted.current = vaultId;
+    setLoading(true);
     try {
       const [nextMeta, nextMembers] = await Promise.all([
         client.getVaultMeta(vaultId),
@@ -93,6 +103,8 @@ export function SettingsVaultProvider({ vaultId, open, children }: SettingsVault
       setMeta(null);
       setMembers([]);
       toast(e instanceof Error ? e.message : "Couldn't read that vault", "error");
+    } finally {
+      if (wanted.current === vaultId) setLoading(false);
     }
   }, [client, vaultId, isOpenVault, refreshVaultMeta, refreshMembers, toast]);
 
@@ -110,11 +122,12 @@ export function SettingsVaultProvider({ vaultId, open, children }: SettingsVault
       vaultId,
       meta: isOpenVault ? storeMeta : meta,
       members: list,
+      loading,
       isOpenVault,
       isAdmin: self?.role === "admin",
       refresh: load,
     };
-  }, [vaultId, isOpenVault, storeMeta, storeMembers, storeMe, meta, members, load]);
+  }, [vaultId, isOpenVault, storeMeta, storeMembers, storeMe, meta, members, loading, load]);
 
   return <SettingsVaultContext.Provider value={value}>{children}</SettingsVaultContext.Provider>;
 }

@@ -39,8 +39,9 @@ export interface MembersTabProps {
  * so Invite hands you to Sharing rather than pretending to mint an account.
  */
 export function MembersTab({ onInvite }: MembersTabProps) {
-  const { members, isOpenVault, isAdmin } = useSettingsVault();
+  const { members, loading, isOpenVault, isAdmin } = useSettingsVault();
   const presence = useWorkspace((s) => s.presence);
+  const reduced = useReducedMotion() ?? false;
 
   const rows = useMemo(() => {
     // Presence only describes the vault that is open; for any other vault the
@@ -81,9 +82,34 @@ export function MembersTab({ onInvite }: MembersTabProps) {
       </Caption>
 
       <div className="mt-[8px] flex flex-col">
-        {rows.map(({ member, online }) => (
-          <MemberRow key={member.peerId} member={member} online={online} canManage={isAdmin} />
-        ))}
+        {rows.length === 0 && loading
+          ? /* Three bars at the real 52px row height: a member list that arrives
+               into an empty pane makes the dialog jump, and an empty pane on a
+               vault that certainly has at least you in it reads as a failure. */
+            [0, 1, 2].map((i) => (
+              <motion.div
+                key={i}
+                data-testid="members-skeleton"
+                aria-hidden
+                className="flex h-[52px] items-center gap-[12px] border-b border-line last:border-0"
+                initial={{ opacity: 0.5 }}
+                animate={reduced ? { opacity: 0.5 } : { opacity: [0.5, 1, 0.5] }}
+                transition={
+                  reduced
+                    ? { duration: 0 }
+                    : { duration: 1.2, repeat: Infinity, ease: "easeInOut", delay: i * 0.1 }
+                }
+              >
+                <span className="h-[32px] w-[32px] shrink-0 rounded-full bg-white/[0.05]" />
+                <span className="flex min-w-0 flex-1 flex-col gap-[6px]">
+                  <span className="h-[10px] w-[124px] rounded-full bg-white/[0.05]" />
+                  <span className="h-[9px] w-[78px] rounded-full bg-white/[0.035]" />
+                </span>
+              </motion.div>
+            ))
+          : rows.map(({ member, online }) => (
+              <MemberRow key={member.peerId} member={member} online={online} canManage={isAdmin} />
+            ))}
       </div>
     </div>
   );
@@ -172,7 +198,10 @@ function MemberRow({
             {...fade}
             className="flex w-full items-center justify-between gap-[12px]"
           >
-            <span className="truncate text-[13px] text-fg">Remove {member.name}?</span>
+            <span className="min-w-0 flex-1 text-[13px] leading-[17px] text-fg">
+              Remove {member.name}?{" "}
+              <span className="text-fg-3">Removing a member also rotates the join code.</span>
+            </span>
             <span className="flex shrink-0 items-center gap-[4px]">
               <GhostButton variant="danger" disabled={busy} onClick={() => void remove()}>
                 Remove

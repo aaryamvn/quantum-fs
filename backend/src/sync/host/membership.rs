@@ -55,12 +55,20 @@ impl HostService {
     /// H alone invokes this API. fan_out_control checks the authenticated
     /// sender before routing kind 7 here. File history deliberately survives.
     pub fn kick(&mut self, target: PeerId) -> Result<PeerId> {
+        self.kick_with_code(target, None)
+    }
+
+    /// Same removal with a caller-chosen replacement join code, so a host can
+    /// install the code a short code derives into. `None` generates one.
+    pub fn kick_with_code(&mut self, target: PeerId, code: Option<JoinCode>) -> Result<PeerId> {
         self.require_running()?;
         self.require_member(target)?;
         if target == self.state.host_id {
             return Err(Error::InvalidInput("cannot kick H"));
         }
-        self.commit_verified(ControlUpdate::Kick(target), None)?;
+        let id_before = self.state.next_control;
+        self.commit_verified_with_code(ControlUpdate::Kick(target), None, code)?;
+        self.note_recent_op(self.state.host_id, id_before);
         self.presence.remove(&target);
         self.challenges.remove(&target);
         self.disconnects.push(target);

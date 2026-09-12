@@ -52,6 +52,7 @@ function Hint({ children, label }: { children: ReactNode; label: string }) {
  */
 function SearchPanel() {
   const vaultId = useWorkspace((s) => s.vaultId);
+  const client = useWorkspace((s) => s.client);
   const navigateTo = useWorkspace((s) => s.navigateTo);
   const select = useWorkspace((s) => s.select);
   const openModal = useWorkspace((s) => s.openModal);
@@ -111,11 +112,13 @@ function SearchPanel() {
   /**
    * What a result does when you pick it.
    *
-   * Finder's rules, deliberately: opening a folder enters it, opening a file
-   * takes you to where it lives and selects it — it never downloads, because a
-   * search result is a place, not a request for bytes. A hit in another vault
-   * cannot be navigated to from here (the store holds one vault at a time), so
-   * it leaves as a `qfs:open-vault` event for the shell to honor.
+   * Finder's rules, deliberately: opening a folder enters it and opening a file
+   * hands it to the OS application, while Reveal is the one that takes you to
+   * where the file lives and selects it. Opening a file needs no vault of its
+   * own — the daemon can open a file in any vault this client belongs to — so a
+   * cross-vault open never switches vaults. Everything that *is* a place, in a
+   * vault the store is not holding, leaves as a `qfs:open-vault` event for the
+   * shell to honor.
    */
   const run = (hit: SearchHit, action: ResultAction): void => {
     const { node } = hit;
@@ -123,6 +126,21 @@ function SearchPanel() {
 
     if (action === "copy-path") {
       copyPath(hit);
+      closeModal();
+      return;
+    }
+
+    if (action === "open" && node.kind === "file") {
+      if (client) {
+        void client.openFile(node.vaultId, node.id).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          toast(`Couldn't open ${node.name}: ${message}`, "error");
+        });
+      } else {
+        // Closing on a pick that did nothing would read as the app losing the
+        // keystroke, so the one reason it could not happen is said out loud.
+        toast("Not connected to the daemon", "error");
+      }
       closeModal();
       return;
     }
@@ -154,8 +172,8 @@ function SearchPanel() {
       return;
     }
 
-    // Reveal, and every file open: stand in the parent with the node selected.
-    // Navigation clears the selection, so selecting has to come after it.
+    // Reveal: stand in the parent with the node selected. Navigation clears the
+    // selection, so selecting has to come after it.
     if (node.parentId) navigateTo(node.parentId);
     select([node.id], { anchor: node.id, focus: node.id });
     closeModal();

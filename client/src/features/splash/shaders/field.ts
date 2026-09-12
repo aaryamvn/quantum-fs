@@ -7,7 +7,7 @@ import type { FieldShader } from "./types";
  *
  * Three rules hold the look together:
  *
- * 1. Colour is never mixed in RGB. Every blob carries a position `u` on a 1-D
+ * 1. Color is never mixed in RGB. Every blob carries a position `u` on a 1-D
  *    ink ramp (0 = coral, ~0.28 = magenta, ~0.45 = violet, 1 = black) and it is
  *    the `u` values that merge, so coral meeting violet always passes through
  *    magenta. The ramp itself interpolates in OKLCh (lightness, chroma, hue)
@@ -44,7 +44,7 @@ float valueNoise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// 3 octaves, roughly zero-centred.
+// 3 octaves, roughly zero-centerd.
 float fbm(vec2 p) {
   float v = 0.0;
   float a = 0.5;
@@ -83,7 +83,7 @@ vec2 swirl(vec2 p, float t) {
 // ── ink ramp ────────────────────────────────────────────────────────────
 // OKLCh stops, measured from the brand sRGB constants to 8 decimals. Hues are
 // unwrapped (21.8° → -10.2° → -82.4°) so the path sweeps monotonically the
-// short way round and never crosses the grey axis.
+// short way round and never crosses the gray axis.
 const vec3 LCH_CORAL   = vec3(0.73610919, 0.16149472,  0.38062433);
 const vec3 LCH_MAGENTA = vec3(0.68787434, 0.24354720, -0.17797847);
 const vec3 LCH_VIOLET  = vec3(0.48755479, 0.29436330, -1.43757377);
@@ -122,7 +122,7 @@ vec3 inkRamp(float u) {
   lch = mix(lch, LCH_VIOLET, smoothstep(0.26, 0.45, u));
   vec3 c = oklchToSrgb(lch);
   // Scaling toward BLACK keeps the sRGB chromaticity exactly, so the tail of
-  // the gradient stays violet instead of going grey. pow() holds the hue a
+  // the gradient stays violet instead of going gray. pow() holds the hue a
   // little longer on the way down. u == 1 is exactly BLACK (the page bg).
   return mix(BLACK, c, 1.0 - pow(smoothstep(0.50, 1.0, u), 1.3));
 }
@@ -283,7 +283,7 @@ void main() {
   }
 
   // Where no ink reaches, the ramp position defaults to 1.0 (black) — that is
-  // what keeps the emptying right-hand side from flashing a coloured veil
+  // what keeps the emptying right-hand side from flashing a colored veil
   // while the field cross-fades.
   float uBlob = (sumU + 0.02) / (sumW + 0.02);
   float uHalo = (sumUH + 0.03) / (sumWH + 0.03);
@@ -320,14 +320,14 @@ void main() {
   // ~18 px left of the panel edge at 1280 wide (558–575 px at u_panel = 0.45).
   float drift = max(0.0075 + 0.40 * breathe, 0.0);
   float uTarget = (uv.x + drift) / u_panel;
-  // Idle: the colour boundary undulates down the panel on a ~18 s period, and
+  // Idle: the color boundary undulates down the panel on a ~18 s period, and
   // the standing wave itself leans and slides on a much slower ~57 s drift — so
   // the edge breathes and tilts instead of ticking through one fixed shape.
   //
   // Offset strictly negative for the same reason the drift above is strictly
   // positive: lowering uTarget moves the black point *right*, so the wave can
   // only ever push the boundary outward, and at 0.009 of ramp (2.3× the old
-  // amplitude) a wave centred on zero would otherwise walk the edge past the
+  // amplitude) a wave centerd on zero would otherwise walk the edge past the
   // 530 px floor the settled gradient is held to. Range ≈ 0.5 … 11 px right of
   // where the drift alone puts it: measured over 3 s … 75 s of idle the black
   // point stays inside 534–553 px at 1280 wide.
@@ -396,7 +396,7 @@ void main() {
   // level from one second to the next, which is why the old 3.5% band read as
   // still. The periods are incommensurate, so the field never repeats a frame.
   //
-  // Every band scales the colour *above* BLACK, never the frame — so it can
+  // Every band scales the color *above* BLACK, never the frame — so it can
   // only ever dim or lift what is already lit and can never raise the dark side
   // above the page background.
   //

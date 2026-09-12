@@ -192,7 +192,14 @@ export interface VaultMeta {
   cleanupThresholdPct: number;
 }
 
-/** Where another member's pointer is, expressed so it survives different window sizes. */
+/**
+ * Where another member's pointer is, expressed so it survives different window sizes.
+ *
+ * Real peers never have one: the embedded daemon's presence only carries online
+ * state (docs/decisions/client-backend-embed.md — live cursors through the host are
+ * forbidden by `sync-host-tcb.md`), so `PeerPresence.cursor` is `null` for every real
+ * peer and only the scripted demo ever fills it in.
+ */
 export interface PeerCursor {
   /** anchor === null: x,y are fractions (0..1) of the canvas viewport. anchor !== null: x,y are px offsets from the center of that node's tile. */
   x: number;
@@ -202,12 +209,22 @@ export interface PeerCursor {
   glideMs: number;
 }
 
-/** Live state of one peer in a vault: where they are and what they are touching. */
+/**
+ * Live state of one peer in a vault: where they are and what they are touching.
+ *
+ * Against the real backend only `peerId`/`online`/`updatedAt` are meaningful —
+ * presence comes from the host's peer list, which knows nothing about the webview's
+ * navigation. `folderId`, `cursor` and `hoveringNodeId` are then `null` and
+ * `draggingNodeIds` empty; the mock and the scripted demo are the only producers
+ * that populate them.
+ */
 export interface PeerPresence {
   peerId: PeerId;
   online: boolean;
   idle: boolean;
+  /** null for real peers (the daemon reports presence, not navigation). */
   folderId: NodeId | null;
+  /** null for real peers; see {@link PeerCursor}. */
   cursor: PeerCursor | null;
   hoveringNodeId: NodeId | null;
   draggingNodeIds: NodeId[];
@@ -271,4 +288,10 @@ export type BackendEvent =
   | { type: "members-changed"; vaultId: VaultId }
   | { type: "vault-changed"; vaultId: VaultId }
   | { type: "recents-changed" }
+  /**
+   * A vault this client belonged to is gone: the owner deleted it, the host kicked
+   * this member, or the membership failed to re-establish. `reason` is a human
+   * sentence for the toast; the vault has already been dropped from `listServers`.
+   */
+  | { type: "vault-removed"; vaultId: VaultId; reason: string }
   | { type: "demo-reset"; vaultId: VaultId };

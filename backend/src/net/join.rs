@@ -253,10 +253,20 @@ impl VaultHost {
         directory: &DirectoryClient,
         addr: SocketAddr,
     ) -> Result<JoinCode> {
+        Self::rotate_code_with(vault, directory, addr, JoinCode::generate()?).await
+    }
+
+    /// Same rotation with a caller-chosen code, so a host can install the code
+    /// a human-typable short code derives into.
+    pub async fn rotate_code_with(
+        vault: &Rc<RefCell<Self>>,
+        directory: &DirectoryClient,
+        addr: SocketAddr,
+        code: JoinCode,
+    ) -> Result<JoinCode> {
         let (code, ad, forget) = {
             let mut state = vault.borrow_mut();
             let old = state.admission().join_code;
-            let code = JoinCode::generate()?;
             let issued_at = unix_time()?.max(
                 state
                     .admission()
@@ -282,15 +292,34 @@ impl VaultHost {
         Ok(code)
     }
     fn admit(&mut self, request: &JoinRequest, peer: &IdentityDocument) -> Result<()> {
+        // The signature still binds the presented code: a stale code is a
+        // validly signed request, and only the equality check is relaxed.
         request.verify(peer)?;
         if request.vault_id != self.admission().vault_id
-            || request.join_code != self.admission().join_code
             || self.host.denied().contains(&peer.peer_id)
         {
             return Err(Error::AuthenticationFailed);
         }
         if !self.host.is_running() {
             return Err(Error::State("host is not running"));
+        }
+        let current_code = request.join_code == self.admission().join_code;
+        // A kick or ROTATE_CODE rotates the code; the code controls entry of
+        // NEW identities only, so a current member reconnecting with the code
+        // it joined with is still admitted. Kicked identities stay denied above.
+        if self.host.has_member(&peer.peer_id) {
+            if !current_code {
+                demo_log::event(
+                    Kind::Membership,
+                    "X-Wing + ML-DSA-65",
+                    "member reconnected with a rotated code",
+                    &[format!("peer  {}", demo_log::peer(peer.peer_id))],
+                );
+            }
+            return Ok(());
+        }
+        if !current_code {
+            return Err(Error::AuthenticationFailed);
         }
         self.host.add_member(peer.clone())?;
         Ok(())
@@ -318,10 +347,22 @@ impl VaultHost {
         addr: SocketAddr,
         target: PeerId,
     ) -> Result<PeerId> {
+        Self::kick_with_code(vault, directory, addr, target, JoinCode::generate()?).await
+    }
+
+    /// Same removal with a caller-chosen replacement code; the rotation that a
+    /// kick performs then matches a human-typable short code.
+    pub async fn kick_with_code(
+        vault: &Rc<RefCell<Self>>,
+        directory: &DirectoryClient,
+        addr: SocketAddr,
+        target: PeerId,
+        code: JoinCode,
+    ) -> Result<PeerId> {
         let (kicked, code, ad, forget) = {
             let mut state = vault.borrow_mut();
             let old = state.join_code();
-            let kicked = state.host.kick(target)?;
+            let kicked = state.host.kick_with_code(target, Some(code))?;
             let metadata = state.admission().clone();
             let forgotten_at = metadata.issued_at;
             let issued_at = forgotten_at
@@ -1829,21 +1870,28 @@ impl JoinedPeer {
         }
     }
 
+    /// One heartbeat round trip: announce the applied watermark and drain the
+    /// ordered reply. Embedders that drive their own timer call this directly.
+    pub async fn heartbeat_once(&mut self) -> Result<()> {
+        self.keys.require_live_traffic(self.peer_id)?;
+        let through = self.replica.borrow().last_applied();
+        send_control(
+            &mut self.stream,
+            &self.keys,
+            self.peer_id,
+            &NetControl::HeartbeatApplied { through },
+        )
+        .await?;
+        self.drain_live_reply().await?;
+        Ok(())
+    }
+
     pub async fn run(&mut self) -> Result<()> {
         let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            self.keys.require_live_traffic(self.peer_id)?;
-            let through = self.replica.borrow().last_applied();
-            send_control(
-                &mut self.stream,
-                &self.keys,
-                self.peer_id,
-                &NetControl::HeartbeatApplied { through },
-            )
-            .await?;
-            self.drain_live_reply().await?;
+            self.heartbeat_once().await?;
         }
     }
 }

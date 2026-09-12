@@ -59,6 +59,31 @@ const DEFAULT_CAPACITY_BYTES = 137438953472;
 const JOINED_VAULT_QUOTA_BYTES = 1073741824;
 const MAX_VAULT_NAME = 40;
 
+/** A join code is this many Base32 characters (docs/decisions/client-backend-embed.md). */
+const JOIN_CODE_LENGTH = 6;
+/** Bounds on the host token in a printed connect string, in Base32 characters. */
+const MIN_TOKEN_LENGTH = 16;
+const MAX_TOKEN_LENGTH = 32;
+/** RFC 4648 Base32, unpadded — the alphabet codes and tokens are printed in. */
+const BASE32 = /^[A-Z2-7]+$/;
+/** `ip:port`, with the ip an IPv4 dotted quad or a bracketed IPv6 literal. */
+const ENDPOINT = /^(?:(\d{1,3}(?:\.\d{1,3}){3})|\[[0-9A-Fa-f:]*:[0-9A-Fa-f.:]*\]):(\d{1,5})$/;
+
+/** The `ip:port` half of a connect string — ranges checked, not just the shape. */
+function isEndpoint(text: string): boolean {
+  const match = ENDPOINT.exec(text);
+  if (!match) return false;
+  const [, v4, port] = match;
+  if (v4 && v4.split(".").some((octet) => Number(octet) > 255)) return false;
+  const portNumber = Number(port);
+  return portNumber >= 1 && portNumber <= 65535;
+}
+
+/** The token half of a connect string: 16-32 Base32 characters. */
+function isToken(text: string): boolean {
+  return text.length >= MIN_TOKEN_LENGTH && text.length <= MAX_TOKEN_LENGTH && BASE32.test(text);
+}
+
 /**
  * Where the demo's side door is hung.
  *
@@ -114,11 +139,20 @@ export function createMockBackend(): BackendClient {
     },
 
     async addServer(input: { name: string; address: string }) {
+      // The host prints `ip:port/TOKEN`. The token is the joining secret, not part of
+      // the address, so it is validated and then dropped
+      // (docs/decisions/client-backend-embed.md).
+      const raw = input.address.trim();
+      const slash = raw.lastIndexOf("/");
+      const endpoint = slash === -1 ? raw : raw.slice(0, slash);
+      const token = slash === -1 ? null : raw.slice(slash + 1);
+      if (!isEndpoint(endpoint)) throw new Error("Invalid server address");
+      if (token !== null && !isToken(token)) throw new Error("Invalid server address");
       const n = servers.length + 1;
       const server: OrchestrationServer = {
         id: `srv_${n}`,
         name: input.name,
-        address: input.address,
+        address: endpoint,
         peerId: `peer_${n}`,
         online: true,
         capacityBytes: DEFAULT_CAPACITY_BYTES,
@@ -157,10 +191,14 @@ export function createMockBackend(): BackendClient {
     },
 
     async joinVault(code: JoinCode) {
-      // The central directory only maps a 6-character code -> (server, vault);
-      // anything that is not exactly six A-Z/0-9 characters never resolves.
-      const normalized = code.trim().toUpperCase();
-      if (!/^[A-Z0-9]{6}$/.test(normalized)) throw new Error("Invalid join code");
+      // Six Base32 characters and nothing else: the daemon resolves the code through
+      // the central directory it knows, so the code never carries an address and
+      // joining never requires adding a server first
+      // (docs/decisions/client-backend-embed.md).
+      const joinCode = code.trim().toUpperCase();
+      if (joinCode.length !== JOIN_CODE_LENGTH || !BASE32.test(joinCode)) {
+        throw new Error("Invalid join code");
+      }
       const n = servers.length + 1;
       const vault: Vault = {
         id: `vlt_${n}_1`,
@@ -228,6 +266,14 @@ export function createMockBackend(): BackendClient {
 
     async requestDownload(vaultId: VaultId, nodeId: NodeId) {
       engine.requestDownload(vaultId, nodeId);
+    },
+
+    async openFile(vaultId: VaultId, nodeId: NodeId) {
+      engine.openFile(vaultId, nodeId);
+    },
+
+    async importFiles(vaultId: VaultId, parentId: NodeId, paths?: string[]) {
+      return engine.importFiles(vaultId, parentId, paths);
     },
 
     async readTextPreview(_vaultId: VaultId, nodeId: NodeId, maxBytes: number) {

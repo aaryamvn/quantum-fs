@@ -1,4 +1,10 @@
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::BTreeSet,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    rc::Rc,
+    time::Duration,
+};
 
 use tokio::{net::TcpListener, task::LocalSet};
 
@@ -10,17 +16,26 @@ use crate::{
     },
     demo_log::{self, Kind},
     ids::PeerId,
-    keystore::{atomic_private_write, KeyStore},
+    keystore::{atomic_private_write, read_private, KeyStore},
     net::{
+        admin::{serve_admin, AdminContext},
         directory::{serve as serve_directory, DirectoryClient, DirectoryStore},
-        join::{join_host, serve_host, unix_time, VaultHost, VaultMetadata},
+        join::{join_host, serve_host, unix_time, VaultHost},
         vaults::VaultSet,
-        JoinCode, VaultId,
+        JoinCode,
     },
-    store::vaults::{discover_vaults, migrate_legacy, prepare_vault_directory},
+    store::vaults::{create_vault_dir, discover_vaults, migrate_legacy},
     sync::host::{HostService, MemberReplica},
     Error, Result,
 };
+
+/// The address other peers can reach on this machine. No packet is sent; the
+/// kernel only resolves which local interface would route to a public address.
+pub fn detect_lan_ip() -> Option<IpAddr> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(8, 8, 8, 8), 53)).ok()?;
+    Some(socket.local_addr().ok()?.ip())
+}
 
 /// H is a role of an authenticated member, never a separate process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,29 +102,14 @@ async fn run_inner(config: Config) -> Result<()> {
         }
         let mut directories = discover_vaults(&keys, &config.data_dir)?;
         let new_id = if config.create_vault {
-            let metadata = VaultMetadata {
-                vault_id: VaultId::generate()?,
-                join_code: JoinCode::generate()?,
-                issued_at: 0,
-                members: vec![keys.peer_id()?],
-                denied: BTreeSet::new(),
-            };
-            let directory = prepare_vault_directory(&keys, &config.data_dir, metadata.vault_id)?;
-            if directory.join("vault").try_exists()?
-                || directory.join("replica.bin").try_exists()?
-            {
-                return Err(Error::State("generated vault already exists"));
-            }
-            atomic_private_write(
-                &directory.join("vault"),
-                &crate::encoding::encode_vault_metadata(&metadata)?,
-            )?;
-            directories.push((metadata.vault_id, directory));
-            Some(metadata.vault_id)
+            let (vault_id, _, directory) = create_vault_dir(&config.data_dir, &keys)?;
+            directories.push((vault_id, directory));
+            Some(vault_id)
         } else {
             None
         };
-        if !directories.is_empty() {
+        let advertise = advertise_addr(&config, local_addr);
+        if !directories.is_empty() || config.directory_addr.is_some() {
             let vaults = VaultSet::new(keys.clone())?;
             for (id, directory) in directories {
                 let mut vault =
@@ -118,10 +118,7 @@ async fn run_inner(config: Config) -> Result<()> {
                     // Re-advertise existing codes after bind too: an ephemeral
                     // port or explicit NAT address can change across restarts.
                     vault
-                        .publish(
-                            &DirectoryClient::new(directory_addr),
-                            config.advertise_addr.unwrap_or(local_addr),
-                        )
+                        .publish(&DirectoryClient::new(directory_addr), advertise)
                         .await?;
                 }
                 if Some(id) == new_id {
@@ -140,6 +137,7 @@ async fn run_inner(config: Config) -> Result<()> {
                 format!("qfsd: vault listening {local_addr}"),
                 &[format!("vaults  {}", vaults.vaults().len())],
             );
+            start_admin(&config, &keys, vaults.clone(), local_addr, advertise).await?;
             return run_vaults(listener, vaults, wraps, &mut shutdown).await;
         }
     }
@@ -188,6 +186,101 @@ async fn run_inner(config: Config) -> Result<()> {
     run_idle_member(listener, wraps, host, &mut shutdown).await
 }
 
+/// The address hosted vaults advertise: the explicit flag, else the LAN address
+/// behind an unspecified bind, else the bound address exactly as today.
+fn advertise_addr(config: &Config, local_addr: SocketAddr) -> SocketAddr {
+    match config.advertise_addr {
+        Some(addr) => addr,
+        None if local_addr.ip().is_unspecified() => match detect_lan_ip() {
+            Some(ip) => SocketAddr::new(ip, local_addr.port()),
+            None => local_addr,
+        },
+        None => local_addr,
+    }
+}
+
+/// Owner-only token file so a restart keeps the app's saved connect string.
+fn load_or_create_admin_token(config: &Config) -> Result<String> {
+    if let Some(token) = &config.admin_token {
+        return Ok(token.clone());
+    }
+    let path = config.data_dir.join("admin-token");
+    if let Some(bytes) = read_private(&path)? {
+        let stored = String::from_utf8(bytes.to_vec())
+            .map_err(|_| Error::State("admin token file is not UTF-8"))?
+            .trim()
+            .to_owned();
+        if !stored.is_empty() {
+            return Ok(stored);
+        }
+    }
+    // 20 characters of the join-code Base32 alphabet: 100 bits of entropy.
+    let token: String = JoinCode::generate()?.to_string().chars().take(20).collect();
+    atomic_private_write(&path, token.as_bytes())?;
+    Ok(token)
+}
+
+async fn start_admin(
+    config: &Config,
+    keys: &KeyStore,
+    vaults: VaultSet,
+    local_addr: SocketAddr,
+    advertise: SocketAddr,
+) -> Result<()> {
+    let token = load_or_create_admin_token(config)?;
+    let bind = match config.admin_addr {
+        Some(addr) => addr,
+        None => {
+            let ip = if config.listen_addr.ip().is_unspecified() {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            } else {
+                config.listen_addr.ip()
+            };
+            let port = local_addr
+                .port()
+                .checked_add(1000)
+                .ok_or(Error::InvalidInput(
+                    "listen port too high for the default admin port; pass --admin-addr",
+                ))?;
+            SocketAddr::new(ip, port)
+        }
+    };
+    let listener = TcpListener::bind(bind).await?;
+    let admin_addr = listener.local_addr()?;
+    let connect = format!("{}:{}/{token}", advertise.ip(), admin_addr.port());
+    demo_log::event(
+        Kind::Lifecycle,
+        "LOCAL",
+        "qfsd: app connect string",
+        &[
+            "connect  printed below (contains the admin token)".to_owned(),
+            format!("address  {advertise}"),
+        ],
+    );
+    eprintln!("qfsd: app connect string {connect}");
+    let context = AdminContext {
+        token,
+        vaults,
+        keys: keys.clone(),
+        data_dir: config.data_dir.clone(),
+        directory: config.directory_addr.map(DirectoryClient::new),
+        directory_addr: config.directory_addr,
+        advertise_addr: advertise,
+        capacity_bytes: config.capacity_bytes,
+    };
+    tokio::task::spawn_local(async move {
+        if let Err(error) = serve_admin(listener, context).await {
+            demo_log::event(
+                Kind::Warning,
+                "LOCAL",
+                "qfsd: admin port stopped",
+                &[format!("reason  {error}")],
+            );
+        }
+    });
+    Ok(())
+}
+
 async fn run_directory(config: &Config, shutdown: &mut Shutdown) -> Result<()> {
     let listener = TcpListener::bind(config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
@@ -200,6 +293,21 @@ async fn run_directory(config: &Config, shutdown: &mut Shutdown) -> Result<()> {
         format!("qfsd: directory listening {local_addr}"),
         &["stores signed routing advertisements only".to_owned()],
     );
+    let reachable = if local_addr.ip().is_unspecified() {
+        SocketAddr::new(
+            detect_lan_ip().unwrap_or_else(|| local_addr.ip()),
+            local_addr.port(),
+        )
+    } else {
+        local_addr
+    };
+    demo_log::event(
+        Kind::Lifecycle,
+        "LOCAL",
+        format!("qfsd: directory address {reachable}"),
+        &["paste this as the app's central server".to_owned()],
+    );
+    eprintln!("qfsd: directory address {reachable}");
     tokio::select! {
         result = serve_directory(listener, store) => result?,
         result = shutdown.wait() => result?,

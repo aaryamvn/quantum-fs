@@ -203,7 +203,7 @@ export function InfoModal() {
                       </span>
                     ) : null}
                     {node.availability === "remote" && node.kind === "file" ? (
-                      <span className="text-fg-3">Double-click to download</span>
+                      <span className="text-fg-3">Double-click to open (downloads first)</span>
                     ) : null}
                   </span>
                 </Row>

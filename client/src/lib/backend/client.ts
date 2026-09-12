@@ -136,6 +136,11 @@ export interface AskAgentInput {
  * - `requestDownload` flips `availability` from `"remote"` to `"downloading"` (with
  *   `progress` ticking 0..1) and finally to `"local"`, emitting upserts as it goes.
  * - `touchRecent` keeps at most 8 recents, newest first, and emits `recents-changed`.
+ * - A join code is 6 characters (A-Z, 2-7). The daemon resolves it through the central
+ *   directory it knows (configured or learned from any added server), so joining never
+ *   requires adding a server first. A server address is the host's printed connect
+ *   string `"ip:port/TOKEN"` (docs/decisions/client-backend-embed.md). Anything else
+ *   rejects with `Error("Invalid join code")` / `Error("Invalid server address")`.
  */
 export interface BackendClient {
   status(): Promise<DaemonStatus>;
@@ -158,6 +163,26 @@ export interface BackendClient {
   setNodeColor(input: SetNodeColorInput): Promise<FsNode>;
   /** Starts a fetch of a `"remote"` file; resolves once the transfer has been queued. */
   requestDownload(vaultId: VaultId, nodeId: NodeId): Promise<void>;
+  /**
+   * Open a file in the OS default application.
+   *
+   * A `"remote"` file is pulled first — the same transfer `requestDownload` runs,
+   * emitting `fs-changed` upserts with `availability`/`progress` as it goes — and the
+   * assembled copy under the app data dir is then handed to the OS
+   * (docs/decisions/client-backend-embed.md). Resolves once the OS has been *asked* to
+   * open it, not when the application is ready; rejects if the bytes could not be
+   * assembled or no application would take the file.
+   */
+  openFile(vaultId: VaultId, nodeId: NodeId): Promise<void>;
+  /**
+   * Import files from the local disk into `parentId`.
+   *
+   * With no `paths` the daemon shows the native file chooser and imports whatever the
+   * user picked — an empty array back means they cancelled. With `paths` (a drop onto
+   * the canvas) exactly those files are imported. Returns the created nodes and also
+   * emits `fs-changed` for them and for every ancestor whose size or child count moved.
+   */
+  importFiles(vaultId: VaultId, parentId: NodeId, paths?: string[]): Promise<FsNode[]>;
   /** First `maxBytes` of a text-ish file for the inspector; null when not previewable. */
   readTextPreview(vaultId: VaultId, nodeId: NodeId, maxBytes: number): Promise<string | null>;
   getAccess(vaultId: VaultId, nodeId: NodeId): Promise<NodeAccess>;

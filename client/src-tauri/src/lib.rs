@@ -1,9 +1,13 @@
 mod bridge;
 mod fs_commands;
 mod fs_state;
-mod fs_types;
+pub mod fs_types;
+pub mod node;
 
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use tauri::{Emitter, Manager};
 
 /// Liveness probe for the webview <-> Rust bridge.
 #[tauri::command]
@@ -11,11 +15,36 @@ fn ping() -> &'static str {
     "pong"
 }
 
+/// Where this client keeps its identities, replicas and assembled files.
+///
+/// `QFS_DATA_DIR` exists so two clients can run side by side on one laptop during a demo — the
+/// backend takes an exclusive lock per identity directory, so a second app sharing the first's
+/// data dir would refuse to start (docs/decisions/client-backend-embed.md).
+fn data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let dir = match std::env::var_os("QFS_DATA_DIR") {
+        Some(value) => PathBuf::from(value),
+        None => app.path().app_data_dir()?,
+    };
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(bridge::BridgeState::seeded())
-        .manage(fs_state::FsState(Mutex::new(fs_state::FsDb::seeded())))
+        .setup(|app| {
+            // Built inside `setup` because the node needs an `AppHandle` to emit through, and the
+            // handle only exists once the app is assembled. Every `backend://` event the webview
+            // listens to comes out of this one callback.
+            let handle = app.handle().clone();
+            let emit: Arc<dyn Fn(&str, serde_json::Value) + Send + Sync> =
+                Arc::new(move |name: &str, payload: serde_json::Value| {
+                    // A failed emit means the window is gone; the next mount re-reads state anyway.
+                    let _ = handle.emit(name, payload);
+                });
+            app.manage(node::Node::start(data_dir(app)?, emit));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ping,
             bridge::daemon_status,
@@ -32,6 +61,8 @@ pub fn run() {
             fs_commands::duplicate_nodes,
             fs_commands::set_node_color,
             fs_commands::request_download,
+            fs_commands::open_node,
+            fs_commands::import_files,
             fs_commands::read_text_preview,
             fs_commands::get_access,
             fs_commands::set_access,

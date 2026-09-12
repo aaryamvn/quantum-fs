@@ -14,9 +14,11 @@ const MAX_SHOWN = 5;
  * The last things you touched, across every vault you are in.
  *
  * Recents are the only cross-vault surface in the rail, which is why a row can
- * do two different things: inside the open vault it is a navigation (go to the
- * folder, select the file), and outside it, it is a vault switch. The switch is
- * a `qfs:open-vault` window event rather than a store call, because opening
+ * do two different things. A file is opened in the OS application straight
+ * through the daemon, with no navigation at all — that works across vaults, so
+ * the row costs no context switch. A folder is a place: inside the open vault it
+ * is a navigation, and outside it, it is a vault switch. The switch is a
+ * `qfs:open-vault` window event rather than a store call, because opening
  * another vault means tearing down this one's tree, presence and subscription —
  * work the app shell owns. The rail only says which vault and where in it.
  *
@@ -33,23 +35,38 @@ export function RecentsSection() {
 
   function open(recent: Recent) {
     const node = recent.node;
-    const isFolder = node.kind === "folder";
-    // A file is shown by its parent folder with the file selected; a folder is
-    // shown by entering it. `parentId` is null only for a root, which cannot be
-    // a file — the fallback keeps the row harmless if the backend disagrees.
-    const folderId: NodeId = isFolder ? node.id : (node.parentId ?? node.id);
-    const select = isFolder ? undefined : [node.id];
+    const store = useWorkspace.getState();
+
+    // A file opens in the OS app, wherever it lives: a recent file is a thing
+    // you were working on, not a place you want to be taken to — and the daemon
+    // can open a file in a vault this screen is not showing, so the row never
+    // costs a vault switch.
+    if (node.kind !== "folder") {
+      const client = store.client;
+      if (!client) {
+        // A row that does nothing when clicked is indistinguishable from a dead
+        // rail, so the missing client is reported rather than swallowed.
+        store.toast("Not connected to the daemon", "error");
+        return;
+      }
+      void client.openFile(node.vaultId, node.id).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        store.toast(`Couldn't open ${node.name}: ${message}`, "error");
+      });
+      return;
+    }
+
+    // A folder is still a place: enter it here, or hand the vault switch to the shell.
+    const folderId: NodeId = node.id;
 
     if (node.vaultId === vaultId) {
-      const store = useWorkspace.getState();
       store.navigateTo(folderId);
-      if (select) store.select(select, { anchor: node.id, focus: node.id });
       return;
     }
 
     window.dispatchEvent(
       new CustomEvent("qfs:open-vault", {
-        detail: { vaultId: node.vaultId, folderId, select },
+        detail: { vaultId: node.vaultId, folderId },
       }),
     );
   }

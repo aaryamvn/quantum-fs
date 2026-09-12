@@ -168,6 +168,8 @@ impl HostService {
             defer_persistence: false,
             admission_path: None,
             disconnects: Vec::new(),
+            recent_ops: VecDeque::new(),
+            last_seen: BTreeMap::new(),
         };
         for (&peer, queue) in &host.state.mailboxes {
             if !queue.is_empty() {

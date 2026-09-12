@@ -163,6 +163,28 @@ export function useVaultRoot(): FsNode | undefined {
   });
 }
 
+/**
+ * What a peer id reads as when the member list cannot name it.
+ *
+ * A vault's history outlives its membership: a peer who left, or one whose
+ * record has not arrived yet, is still the author of half the events on a node.
+ * Showing 64 hex characters there tells nobody anything and showing "Unknown"
+ * reads as an error, so the app admits the one true fact — somebody else did
+ * this — and gives the face a neutral mark instead of initials it cannot know.
+ */
+export const UNKNOWN_MEMBER_NAME = "Another member";
+export const UNKNOWN_MEMBER_INITIALS = "·";
+
+/** The name and initials to draw for an actor, resolved or not. */
+export function actorLabel(member: Member | null | undefined): {
+  name: string;
+  initials: string;
+} {
+  return member
+    ? { name: member.name, initials: member.initials }
+    : { name: UNKNOWN_MEMBER_NAME, initials: UNKNOWN_MEMBER_INITIALS };
+}
+
 export function useMember(peerId: PeerId | null | undefined): Member | undefined {
   return useWorkspace((s) =>
     peerId ? s.members.find((member) => member.peerId === peerId) : undefined,

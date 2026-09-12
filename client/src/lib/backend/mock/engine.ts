@@ -80,6 +80,13 @@ const DOWNLOAD_MAX_MS = 4200;
 /** Pretend LAN throughput: 50 MiB/s. Only used to make big files feel bigger. */
 const DOWNLOAD_BYTES_PER_SECOND = 52_428_800;
 
+/** An imported file is invented, so its size is drawn from a plausible range: 64 KiB… */
+const IMPORT_MIN_BYTES = 65_536;
+/** …up to 24 MiB, which is big enough to look like a real asset and small enough to fit a quota. */
+const IMPORT_MAX_BYTES = 25_165_824;
+/** With no paths to name them, the chooser "returns" this many files. */
+const IMPORT_MAX_FAKE_FILES = 3;
+
 /** Presence is pointer traffic; one packet per frame is plenty and 30ms is under a frame. */
 const PRESENCE_THROTTLE_MS = 30;
 
@@ -817,6 +824,87 @@ export class FsEngine {
       this.emitUpserts(vaultId, [live.id], this.self);
     }, DOWNLOAD_TICK_MS);
     this.downloads.set(node.id, handle);
+  }
+
+  /**
+   * "Open in the default application", as far as a browser can honestly go.
+   *
+   * There is no OS to hand the bytes to, so the observable part is the part the UI
+   * reacts to: a remote file starts the same simulated pull `requestDownload` runs
+   * (the tile shows its ring), and either way the node becomes the newest recent.
+   * Returns as soon as that is set in motion, exactly like the real bridge, which
+   * resolves when the OS was *asked* to open the file.
+   */
+  openFile(vaultId: VaultId, nodeId: NodeId): void {
+    const node = this.node(nodeId);
+    if (node.kind === "file" && node.availability === "remote") {
+      this.requestDownload(vaultId, nodeId);
+    }
+    this.touchRecent(vaultId, nodeId);
+  }
+
+  /**
+   * Invent the files a native chooser or a drop would have produced.
+   *
+   * With `paths` the basenames are honest — a drop really did name those files — and
+   * each one lands under a Finder-unique name rather than rejecting on a collision,
+   * because a drop of a file that is already there should still add a copy. Without
+   * them there was no chooser to show, so one to three placeholders stand in. Sizes
+   * come from the engine's seeded RNG, so screenshots stay stable.
+   */
+  importFiles(vaultId: VaultId, parentId: NodeId, paths?: string[]): FsNode[] {
+    const parent = this.folder(parentId);
+    const now = Date.now();
+
+    const basenames = (paths ?? [])
+      .map((path) => path.split(/[/\\]/).pop() ?? "")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0);
+    const count =
+      basenames.length > 0
+        ? basenames.length
+        : 1 + Math.floor(this.random() * IMPORT_MAX_FAKE_FILES);
+
+    const created: FsNode[] = [];
+    const touched = new Set<NodeId>([parent.id]);
+    for (let i = 0; i < count; i += 1) {
+      const desired = basenames[i] ?? `Imported file ${i + 1}.pdf`;
+      const name = uniqueName(
+        this.childrenOf(parent.id).map((child) => child.name),
+        desired,
+      );
+      const sizeBytes =
+        IMPORT_MIN_BYTES + Math.round(this.random() * (IMPORT_MAX_BYTES - IMPORT_MIN_BYTES));
+      const node: FsNode = {
+        id: this.nextNodeId(vaultId),
+        vaultId,
+        parentId: parent.id,
+        kind: "file",
+        name,
+        sizeBytes,
+        createdAt: now,
+        modifiedAt: now,
+        createdBy: this.self,
+        modifiedBy: this.self,
+        color: null,
+        // The bytes came from this machine, so this peer is the only holder.
+        availability: "local",
+        progress: null,
+        holders: [this.self],
+        childCount: 0,
+      };
+      this.nodes.set(node.id, node);
+      parent.childCount += 1;
+      // Rolls the new size up the whole ancestor chain, `parent` included.
+      this.bumpSizes(parent.id, sizeBytes, touched);
+      this.record(vaultId, node.id, "created", this.self, now, null, null, "imported from this Mac");
+      touched.add(node.id);
+      created.push(structuredClone(node));
+    }
+
+    this.touch(parent, this.self, now);
+    this.emitUpserts(vaultId, touched, this.self);
+    return created;
   }
 
   readTextPreview(nodeId: NodeId, maxBytes: number): string | null {

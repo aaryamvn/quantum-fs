@@ -10,6 +10,15 @@ import { useBackend } from "@/lib/backend";
 const CODE_LENGTH = 6;
 const CONFIRM_MS = 1400;
 
+/**
+ * Keep only the Base32 alphabet the directory mints codes from.
+ *
+ * `CodeInput` accepts any alphanumeric, so the filter lives here: `0`, `1`, `8`
+ * and `9` are not in RFC 4648 Base32, and a code read off another screen is
+ * typed, so it arrives in whatever case the reader used.
+ */
+const sanitize = (raw: string) => raw.toUpperCase().replace(/[^A-Z2-7]/g, "");
+
 const FADE = {
   initial: { opacity: 0 },
   animate: { opacity: 1, transition: { duration: 0.2 } },
@@ -55,10 +64,11 @@ export function JoinVaultModal({ open, onClose }: { open: boolean; onClose(): vo
       const vault = await joinVault(code);
       setJoined(vault.name);
       timer.current = setTimeout(onClose, CONFIRM_MS);
-    } catch {
-      // The directory either resolves the code or it doesn't; the reason it
-      // gives back is for logs, not for the person holding the invite.
-      setError("That code didn't work");
+    } catch (e) {
+      // Whatever the daemon said: an expired code, a rotated one and an
+      // unreachable directory are three different problems for the person
+      // holding the invite, and only the daemon knows which one this was.
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -69,7 +79,7 @@ export function JoinVaultModal({ open, onClose }: { open: boolean; onClose(): vo
       open={open}
       onClose={onClose}
       title="Join a Vault"
-      description={joined ? undefined : "Enter the join code"}
+      description={joined ? undefined : "Enter the 6-character code from the vault owner"}
     >
       <AnimatePresence mode="wait" initial={false}>
         {joined === null ? (
@@ -78,7 +88,7 @@ export function JoinVaultModal({ open, onClose }: { open: boolean; onClose(): vo
               length={CODE_LENGTH}
               value={code}
               onChange={(next) => {
-                setCode(next);
+                setCode(sanitize(next));
                 if (error) setError(null);
               }}
               onEnter={() => void submit()}

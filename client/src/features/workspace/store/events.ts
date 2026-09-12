@@ -14,6 +14,8 @@
 
 import { useEffect } from "react";
 
+import { useShellNotice } from "@/features/home/shellNotice";
+
 import { useWorkspace } from "./workspaceStore";
 
 export function useWorkspaceEvents(): void {
@@ -52,6 +54,25 @@ export function useWorkspaceEvents(): void {
         case "recents-changed":
           // Recents span every vault, so this one is never filtered.
           void store.refreshRecents();
+          return;
+        case "vault-removed":
+          // Kicked, or the host forgot the vault. Either way the reason goes to
+          // the shell notice and not to a toast: the workspace's stack unmounts
+          // with the screen, so a toast would be posted into a component that is
+          // about to disappear and the user would never see the sentence.
+          if (event.vaultId !== openVaultId) {
+            // A vault we were not looking at still vanished from the home list,
+            // and a row disappearing with no account of why reads as a bug.
+            useShellNotice.getState().show(event.reason, "info");
+            return;
+          }
+          // Notice first, teardown second: the home screen mounts off the back
+          // of `qfs:home` and reads the notice that is already standing.
+          useShellNotice.getState().show(event.reason, "error");
+          store.closeVault();
+          // The workspace screen has nothing left to draw, so the shell is asked
+          // to go back home the same way the sidebar asks it to.
+          window.dispatchEvent(new CustomEvent("qfs:home"));
           return;
         case "demo-reset":
           if (event.vaultId !== openVaultId) return;

@@ -36,3 +36,17 @@ Layout:
 - `src-tauri/`              Rust shell + `bridge.rs`, `fs_types.rs`, `fs_state.rs`, `fs_commands.rs`
 - `scripts/`                `dev.mjs`, `shoot.mjs`, `seed-fs.mjs`
 - fonts                     GT Walsheim Trial, loaded from the OS via `local()` (trial licence — no font files in the repo)
+
+Demo (three clients, two Tart macOS guests + this host):
+- `backend/scripts/demo_servers.sh start` — central directory + orchestration servers A and B,
+  each in its own Terminal window. It prints `DIRECTORY`, `SERVER A` and `SERVER B`; the two
+  server lines are the `IP:PORT/TOKEN` connect strings you paste into the app's "Add server".
+  `demo_servers.sh status` shows which ports are up, `stop` shuts them down (data kept).
+- `client/scripts/vm-demo.sh build && client/scripts/vm-demo.sh up` — bundles the app into
+  `/tmp/qfs-demo/app`, boots `qfs-client-1` and `qfs-client-2`, copies the app in over the
+  `qfs` share and starts it in a guest Terminal (guest login `admin`/`admin`; it prints each
+  guest IP). `vm-demo.sh down` stops the guests.
+- `client/scripts/vm-demo.sh host-client` — the third client, on this machine, in its own
+  Terminal with `QFS_DATA_DIR=/tmp/qfs-demo/client-host`.
+Apple's Virtualization framework runs at most two macOS guests at once, which is why client 3
+lives on the host rather than in a third VM.

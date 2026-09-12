@@ -11,12 +11,15 @@ import { createTauriBackend } from "./tauri";
  * Picks the implementation for the current runtime: the Rust bridge inside the
  * Tauri shell, the seeded in-memory mock in a plain browser.
  *
- * The scripted multiplayer demo is the one wrapper around it; deleting this call and
- * `./demo/` removes it entirely (docs/decisions/client-workspace.md).
+ * The scripted multiplayer demo wraps ONLY the mock. Inside Tauri the vaults, the
+ * members and the peers are real, and the script would invent moves and cursors on
+ * top of someone's actual files; the browser is where it belongs (design work and
+ * screenshots). Deleting this call and `./demo/` removes it entirely
+ * (docs/decisions/client-workspace.md).
  */
 export function createBackend(): BackendClient {
-  const inner = isTauri() ? createTauriBackend() : createMockBackend();
-  return withDemo(inner, devQuery.demo);
+  const inner = isTauri() ? createTauriBackend() : withDemo(createMockBackend(), devQuery.demo);
+  return inner;
 }
 
 export type {
@@ -69,5 +72,5 @@ export { FOLDER_COLORS } from "./types";
 export { SEED_SERVERS } from "./seed";
 export { createMockBackend } from "./mock";
 export { createTauriBackend } from "./tauri";
-export { BackendProvider, useBackend } from "./BackendProvider";
+export { BackendProvider, useBackend, useBackendClient } from "./BackendProvider";
 export type { BackendContextValue } from "./BackendProvider";

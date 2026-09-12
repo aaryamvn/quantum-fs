@@ -46,6 +46,65 @@ at the newly bound address; adding `--create-vault` creates one more vault.
 Successful admission logs `accepted vault member; pair live` on H and
 `joined vault` on the member. Ctrl-C or SIGTERM shuts down gracefully.
 
+### Admin port
+
+Every host also serves a token-gated, line-oriented admin port for the desktop
+app. On startup it prints one copy-pasteable connect string to stderr:
+
+```
+qfsd: app connect string 192.168.1.24:8447/KRJ3XQ7A2FMPH5D4WZ6B
+```
+
+The token lives in `--data-dir/admin-token` (owner-only) and survives restarts;
+`--admin-token` pins it and `--admin-addr` pins the address, which otherwise is
+the listen IP with the listen port plus 1000. `--capacity-bytes` sets the
+storage the server reports (default 32 GiB). A directory prints its own
+reachable address the same way: `qfsd: directory address 192.168.1.24:7440`.
+
+When the bind address is `0.0.0.0`, `--advertise-addr` is auto-detected from
+the LAN IP of the interface that routes off-machine, so directory ads and the
+connect string carry a reachable address without extra flags.
+
+Each connection sends UTF-8 lines ending in `\n`, normally starting with
+`AUTH <token>` (`OK`, or `ERR unauthorized` and close). The read-only commands
+`PING`, `STATUS` and `OPS` also answer before, and entirely without, `AUTH`;
+an unauthenticated `STATUS` prints `-` instead of each vault's join code.
+`CREATE_VAULT`, `KICK`, `ROTATE_CODE` and `FORGET_VAULT` answer
+`ERR unauthorized` until the token arrives. Idle connections close after 5 s and
+a host serves at most 16 at once. Commands:
+
+- `PING` — `OK`.
+- `STATUS` — one `SERVER` line, then `VAULT` and `MEMBER` lines per hosted
+  vault (join code, quota, used bytes, member and online counts, presence,
+  last heartbeat, queued ops), then `END`.
+- `CREATE_VAULT <quota_bytes> <creator_peer_hex|->` — `OK <vault_hex> <short>`;
+  creates, publishes, and serves the vault immediately.
+- `KICK <vault_hex> <peer_hex>` — `OK <new_short_code>`.
+- `ROTATE_CODE <vault_hex>` — `OK <new_short_code>`.
+- `FORGET_VAULT <vault_hex>` — `OK`; stops serving the vault and keeps its
+  directory as `vaults/.removed-<hex>-<unix_secs>`.
+- `OPS <vault_hex> <since_record_id>` — `OP <id> <actor_hex> <at_unix_ms>`
+  lines from an in-memory ring (last 2048) of committed operations that had an
+  authenticated sender; ids can have gaps. Then `END`.
+
+Every other command answers `ERR unknown command`; failures answer one
+`ERR <message>` line. Nothing about the handshake, admission, control log,
+manifests, or chunk crypto is reachable from this port.
+
+Vaults the admin port creates get a six-character short code (`A-Z2-7`, the
+join-code alphabet) that a person can read aloud. The host derives the 16-byte
+join code the protocol actually uses from it — the first 16 bytes of
+SHA-256("qfs/v1/short-code/" || the uppercased six characters) — so nothing
+about admission, the directory, or the wire format changes, and a member can
+still join by typing the 26-character Base32 form. `CREATE_VAULT`,
+`ROTATE_CODE` and `KICK` mint a fresh short code, install its derived join
+code, record it in the vault's `app-meta`, and answer with the six characters;
+`STATUS` prints the short code for vaults that have one and the 26-character
+code for older vaults (including those created with `--create-vault`).
+
+The admin port is reachable from the LAN by design (token-gated); bind
+`--admin-addr 127.0.0.1:PORT` to keep it local.
+
 ### Demo terminal
 
 Every `qfsd` startup, including directory mode and existing-vault restarts,

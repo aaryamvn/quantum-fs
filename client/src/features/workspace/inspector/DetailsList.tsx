@@ -9,7 +9,7 @@ import { formatBytes } from "@/lib/format";
 import { formatPath, pathOf } from "@/lib/path";
 import { formatDateTime, formatRelative } from "@/lib/time";
 
-import { useMember, useWorkspace } from "../store";
+import { actorLabel, useMember, useWorkspace } from "../store";
 
 export interface DetailsListProps {
   node: FsNode;
@@ -51,12 +51,12 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
  */
 function Person({ label, peerId, at }: { label: string; peerId: PeerId; at: number }) {
   const member = useMember(peerId);
-  const name = member?.name ?? "Unknown member";
+  const { name, initials } = actorLabel(member);
 
   return (
     <div className="flex items-start gap-[8px] py-[6px]">
       <span className="w-[84px] shrink-0 text-[12px] leading-[20px] text-fg-3">{label}</span>
-      <Avatar peerId={peerId} name={name} initials={member?.initials} size={20} />
+      <Avatar peerId={peerId} name={name} initials={initials} size={20} />
       <span className="min-w-0 flex-1">
         <span className="block text-[12.5px] leading-[20px] break-words text-fg">{name}</span>
         <span className="block text-[11px] leading-[15px] text-fg-3">{formatRelative(at)}</span>
@@ -132,7 +132,9 @@ export function DetailsList({ node }: DetailsListProps) {
       </div>
 
       {node.availability === "remote" && !isFolder ? (
-        <p className="mt-[4px] text-[11px] leading-[15px] text-fg-3">Double-click to download</p>
+        <p className="mt-[4px] text-[11px] leading-[15px] text-fg-3">
+          Double-click to open (downloads first)
+        </p>
       ) : null}
 
       <dl className="mt-[10px] flex flex-col">

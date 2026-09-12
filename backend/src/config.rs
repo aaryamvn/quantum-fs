@@ -38,6 +38,16 @@ pub struct Config {
     /// Numeric address advertised after bind (for NAT/container forwarding).
     #[arg(long)]
     pub advertise_addr: Option<SocketAddr>,
+    /// Token-gated local admin port for the desktop app.
+    /// Defaults to the bound listen IP with the listen port plus 1000.
+    #[arg(long, value_name = "SOCKET_ADDR")]
+    pub admin_addr: Option<SocketAddr>,
+    /// Fixed admin token; by default one is generated in data_dir/admin-token.
+    #[arg(long, value_name = "TOKEN")]
+    pub admin_token: Option<String>,
+    /// Storage this server advertises to the app, in bytes (default 32 GiB).
+    #[arg(long, default_value_t = 34_359_738_368)]
+    pub capacity_bytes: u64,
 }
 
 impl Config {

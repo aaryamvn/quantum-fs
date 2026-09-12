@@ -74,6 +74,22 @@ export function BackendProvider({ children }: { children: ReactNode }) {
         case "daemon-status":
           setStatus(e.status);
           break;
+        case "vault-removed":
+          // The vault list is what changed, and `refresh` is the only thing that reads
+          // it.
+          void refresh();
+          // The reason still has to reach someone. The workspace's own handler
+          // explains a removal, but it is subscribed only while a workspace is
+          // mounted, so at home a row would vanish with no account of why — which
+          // reads as a bug. Announced as a window event rather than written into
+          // the shell notice store directly: this is the backend seam, and it
+          // stays clear of a feature's store (the home screen owns that line).
+          window.dispatchEvent(
+            new CustomEvent("qfs:vault-removed", {
+              detail: { vaultId: e.vaultId, reason: e.reason },
+            }),
+          );
+          break;
         default:
           // Workspace events (fs, presence, members, recents) belong to the workspace
           // store, not to this provider; ignoring them here keeps the two independent.
@@ -135,4 +151,15 @@ export function useBackend(): BackendContextValue {
   const value = useContext(BackendContext);
   if (!value) throw new Error("useBackend must be used inside <BackendProvider>");
   return value;
+}
+
+/**
+ * Just the client, for the many callers that only want to invoke the seam.
+ *
+ * The client is stable for the life of the app while `servers`/`status` change on
+ * every event, so depending on the whole context value re-renders those callers for
+ * data they never read.
+ */
+export function useBackendClient(): BackendClient {
+  return useBackend().client;
 }

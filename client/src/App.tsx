@@ -108,9 +108,15 @@ function Shell() {
         if (!alive) return;
         useWorkspace.getState().attach(client, me);
         setAttached(true);
+        // The counterpart of `qfs:me-failed`: the rail latches the failure at
+        // module load, so a retry that works has to say so or every footer
+        // mounted afterwards keeps reporting a disconnection that is over.
+        window.dispatchEvent(new CustomEvent("qfs:me-ok"));
       })
       .catch(() => {
         // A missing identity is the backend's to report; the home still works.
+        // The rail is told, so its footer stops saying "Connecting…" forever.
+        if (alive) window.dispatchEvent(new CustomEvent("qfs:me-failed"));
       });
     return () => {
       alive = false;

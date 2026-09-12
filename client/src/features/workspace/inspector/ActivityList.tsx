@@ -6,7 +6,7 @@ import { GhostButton } from "@/components/ui/GhostButton";
 import type { HistoryEvent, NodeId } from "@/lib/backend";
 import { formatRelative } from "@/lib/time";
 
-import { useNode, useWorkspace } from "../store";
+import { actorLabel, useNode, useWorkspace } from "../store";
 
 /** Fired by the history modal (and the demo) when an append happened out of band. */
 const HISTORY_CHANGED = "qfs:history-changed";
@@ -71,15 +71,15 @@ export function ActivityList({ nodeId, limit = 4 }: ActivityListProps) {
       ) : (
         <ul className="flex flex-col">
           {shown.map((event) => {
-            const member = members.find((entry) => entry.peerId === event.by);
-            const name = member?.name ?? "Someone";
+            const member = event.by ? members.find((entry) => entry.peerId === event.by) : undefined;
+            const { name, initials } = actorLabel(member);
 
             return (
               <li key={event.id} className="flex items-start gap-[8px] py-[6px]">
                 <Avatar
                   peerId={event.by}
                   name={name}
-                  initials={member?.initials}
+                  initials={initials}
                   size={18}
                   className="mt-[1px]"
                 />

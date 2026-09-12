@@ -1,12 +1,14 @@
 import { useMemo, useRef } from "react";
 import {
   ClipboardPaste,
+  CloudDownload,
   Copy,
   FilePlus,
   Files,
   FolderOpen,
   FolderPlus,
   History,
+  Import,
   Info,
   Lock,
   Palette,
@@ -106,6 +108,8 @@ function ItemMenu({ nodeId }: { nodeId: NodeId }) {
   const selection = useWorkspace((s) => s.selection);
   const openModal = useWorkspace((s) => s.openModal);
   const openNode = useWorkspace((s) => s.openNode);
+  const download = useWorkspace((s) => s.download);
+  const importFiles = useWorkspace((s) => s.importFiles);
   const startRename = useWorkspace((s) => s.startRename);
   const duplicateNodes = useWorkspace((s) => s.duplicateNodes);
   const copy = useWorkspace((s) => s.copy);
@@ -132,15 +136,42 @@ function ItemMenu({ nodeId }: { nodeId: NodeId }) {
         Get Info
       </MenuItem>
 
-      {/* Open is the only way in, for a local file and a remote one alike: there is
-          no separate fetch row because pulling a file down is not an errand the
-          user runs, it is what opening something you do not have yet means. */}
+      {/* Open is one instruction for a local file and a remote one alike: pulling
+          a file down is what opening something you do not have yet means, so the
+          row never branches on availability. */}
       <MenuItem
         icon={isFolder ? <FolderOpen {...ICON} /> : <FileIcon name={node.name} size={16} />}
         onSelect={() => openNode(nodeId)}
       >
         Open
       </MenuItem>
+
+      {/* Fetch without open, for the one case where the distinction is real: a
+          file that is not on this Mac, that you want on this Mac before you are
+          somewhere with no network. One file only — a selection-wide fetch is a
+          different feature — and gone entirely once the bytes are here. */}
+      {!multi && !isFolder && node.availability === "remote" ? (
+        <MenuItem
+          data-menu-item="download"
+          icon={<CloudDownload {...ICON} />}
+          onSelect={() => void download(nodeId)}
+        >
+          Download
+        </MenuItem>
+      ) : null}
+
+      {/* A folder's own menu can fill it: right-clicking the tile is how you
+          import into a folder without entering it first, which is the same row
+          the background menu offers for the folder you are standing in. */}
+      {isFolder ? (
+        <MenuItem
+          data-menu-item="import"
+          icon={<Import {...ICON} />}
+          onSelect={() => void importFiles(nodeId)}
+        >
+          Import files…
+        </MenuItem>
+      ) : null}
 
       <MenuItem
         icon={<Pencil {...ICON} />}
@@ -202,6 +233,7 @@ function BackgroundMenu() {
   const folderId = useWorkspace((s) => s.folderId);
   const clipboard = useWorkspace((s) => s.clipboard);
   const createNode = useWorkspace((s) => s.createNode);
+  const importFiles = useWorkspace((s) => s.importFiles);
   const paste = useWorkspace((s) => s.paste);
   const selectAll = useWorkspace((s) => s.selectAll);
   const openModal = useWorkspace((s) => s.openModal);
@@ -227,6 +259,17 @@ function BackgroundMenu() {
         onSelect={() => void createNode("file")}
       >
         New File
+      </MenuItem>
+
+      {/* Import is the only way real bytes enter a vault, so it sits with the two
+          "new" rows rather than under a rule: from the user's side it is the
+          third way to put something in this folder. */}
+      <MenuItem
+        data-menu-item="import"
+        icon={<Import {...ICON} />}
+        onSelect={() => void importFiles(folderId)}
+      >
+        Import files…
       </MenuItem>
 
       <MenuSeparator />

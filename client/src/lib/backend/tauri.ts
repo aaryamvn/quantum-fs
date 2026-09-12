@@ -60,9 +60,16 @@ const EVENT_VAULT_CHANGED = "backend://vault-changed";
 const EVENT_RECENTS_CHANGED = "backend://recents-changed";
 /** Emitted on every presence tick of a vault; payload is {@link PresencePayload}. */
 const EVENT_PRESENCE = "backend://presence";
+/** Emitted when a membership ends (deleted, kicked, unrecoverable); payload is {@link VaultRemovedPayload}. */
+const EVENT_VAULT_REMOVED = "backend://vault-removed";
 
 interface VaultScopedPayload {
   vaultId: VaultId;
+}
+
+interface VaultRemovedPayload {
+  vaultId: VaultId;
+  reason: string;
 }
 
 interface FsChangedPayload {
@@ -246,8 +253,8 @@ export function createTauriBackend(): BackendClient {
     /**
      * Bridge every `backend://` event onto the one `BackendEvent` union.
      *
-     * `listen` resolves asynchronously, so the returned unsubscribe waits for all
-     * six registrations before detaching them — otherwise a component that mounts
+     * `listen` resolves asynchronously, so the returned unsubscribe waits for every
+     * registration before detaching them — otherwise a component that mounts
      * and unmounts inside one tick would leak the listeners that had not resolved.
      */
     subscribe(listener: (e: BackendEvent) => void) {
@@ -276,6 +283,15 @@ export function createTauriBackend(): BackendClient {
         }),
         listen<PresencePayload>(EVENT_PRESENCE, (e) => {
           listener({ type: "presence", vaultId: e.payload.vaultId, peers: e.payload.peers });
+        }),
+        listen<VaultRemovedPayload>(EVENT_VAULT_REMOVED, (e) => {
+          // The vault is gone; a cached tree for it can only mislead the next search.
+          treeCache.delete(e.payload.vaultId);
+          listener({
+            type: "vault-removed",
+            vaultId: e.payload.vaultId,
+            reason: e.payload.reason,
+          });
         }),
       ];
 
@@ -320,6 +336,22 @@ export function createTauriBackend(): BackendClient {
 
     requestDownload(vaultId: VaultId, nodeId: NodeId) {
       return invokeCommand<void>("request_download", { vaultId, nodeId });
+    },
+
+    openFile(vaultId: VaultId, nodeId: NodeId) {
+      return invokeCommand<void>("open_node", { vaultId, nodeId });
+    },
+
+    /**
+     * `paths` is sent as an explicit `null` rather than omitted: Rust deserializes the
+     * input struct as a whole, and a missing key on an `Option<Vec<String>>` field is
+     * only tolerated with `#[serde(default)]` — `null` means "show the chooser" on
+     * either side.
+     */
+    importFiles(vaultId: VaultId, parentId: NodeId, paths?: string[]) {
+      return invokeCommand<FsNode[]>("import_files", {
+        input: { vaultId, parentId, paths: paths ?? null },
+      });
     },
 
     readTextPreview(vaultId: VaultId, nodeId: NodeId, maxBytes: number) {

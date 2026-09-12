@@ -74,6 +74,17 @@ impl VaultSet {
         Ok(())
     }
 
+    /// Drops one hosted vault and every pair binding that pointed at it.
+    /// serve_host resolves vaults per Join, so removal takes effect at once.
+    pub fn remove(&self, vault_id: VaultId) -> Option<Rc<RefCell<VaultHost>>> {
+        let mut state = self.inner.borrow_mut();
+        let vault = state.vaults.remove(&vault_id)?;
+        state
+            .bindings
+            .retain(|_, binding| binding.vault_id != vault_id);
+        Some(vault)
+    }
+
     pub fn vaults(&self) -> Vec<Rc<RefCell<VaultHost>>> {
         self.inner.borrow().vaults.values().cloned().collect()
     }

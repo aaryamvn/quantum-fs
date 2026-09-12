@@ -9,7 +9,7 @@ use crate::{
     encoding,
     ids::FileId,
     keystore::{atomic_private_write, read_private, KeyStore},
-    net::VaultId,
+    net::{join::VaultMetadata, JoinCode, VaultId},
     Error, Result,
 };
 
@@ -31,6 +31,39 @@ pub(crate) fn prepare_vault_directory(
     ensure_private_directory(&destination)?;
     keys.require_data_dir_lock(&destination)?;
     Ok(destination)
+}
+
+/// The one code path that creates a hosted vault on disk: fresh ids, the
+/// private per-vault directory, and its admission metadata file.
+pub fn create_vault_dir(data_dir: &Path, keys: &KeyStore) -> Result<(VaultId, JoinCode, PathBuf)> {
+    let join_code = JoinCode::generate()?;
+    let (vault_id, directory) = create_vault_dir_with_code(data_dir, keys, join_code)?;
+    Ok((vault_id, join_code, directory))
+}
+
+/// Same creation path with a caller-chosen join code, so a host can mint one
+/// that a short code derives into.
+pub fn create_vault_dir_with_code(
+    data_dir: &Path,
+    keys: &KeyStore,
+    code: JoinCode,
+) -> Result<(VaultId, PathBuf)> {
+    let metadata = VaultMetadata {
+        vault_id: VaultId::generate()?,
+        join_code: code,
+        issued_at: 0,
+        members: vec![keys.peer_id()?],
+        denied: BTreeSet::new(),
+    };
+    let directory = prepare_vault_directory(keys, data_dir, metadata.vault_id)?;
+    if directory.join("vault").try_exists()? || directory.join("replica.bin").try_exists()? {
+        return Err(Error::State("generated vault already exists"));
+    }
+    atomic_private_write(
+        &directory.join("vault"),
+        &encoding::encode_vault_metadata(&metadata)?,
+    )?;
+    Ok((metadata.vault_id, directory))
 }
 
 pub fn discover_vaults(keys: &KeyStore, data_dir: &Path) -> Result<Vec<(VaultId, PathBuf)>> {
@@ -61,6 +94,11 @@ pub fn discover_vaults(keys: &KeyStore, data_dir: &Path) -> Result<Vec<(VaultId,
                     .file_name()
                     .into_string()
                     .map_err(|_| Error::InvalidInput("invalid vault directory name"))?;
+                // Forgotten vaults are renamed to `.removed-<hex>-<secs>` and
+                // stay on disk for recovery; they are not hosted again.
+                if name.starts_with('.') {
+                    continue;
+                }
                 let id = parse_hex_vault_id(&name)?;
                 let directory = entry.path();
                 crate::store::transaction::recover_admission_transaction(&directory.join("vault"))?;

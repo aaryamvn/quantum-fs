@@ -1,7 +1,7 @@
-import { FilePlus, FolderPlus, History, LayoutGrid, Lock, Share2, Upload } from "lucide-react";
+import { FilePlus, FolderPlus, History, Import, LayoutGrid, Lock, Share2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { useCallback, useRef } from "react";
-import type { ChangeEvent, ReactElement } from "react";
+import { useCallback } from "react";
+import type { ReactElement } from "react";
 
 import { Divider } from "@/components/ui/Divider";
 import { GhostButton } from "@/components/ui/GhostButton";
@@ -50,23 +50,9 @@ export function ActionBar() {
 
   const folderId = useWorkspace((s) => s.folderId);
   const createNode = useWorkspace((s) => s.createNode);
+  const importFiles = useWorkspace((s) => s.importFiles);
   const openModal = useWorkspace((s) => s.openModal);
-  const toast = useWorkspace((s) => s.toast);
   const isCreator = useIsCreator(folderId);
-
-  const fileInput = useRef<HTMLInputElement>(null);
-
-  // Upload has no daemon behind it yet. Rather than a dead button, the picker
-  // opens for real and the count comes back as a toast, so the gap is honest and
-  // the wiring (picker → count → message) is already proven when the daemon lands.
-  const onPicked = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      const count = e.target.files?.length ?? 0;
-      if (count > 0) toast(`Upload lands with the daemon — ${count} files skipped`, "info");
-      e.target.value = "";
-    },
-    [toast],
-  );
 
   const openFor = useCallback(
     (kind: "share" | "access" | "history") => {
@@ -105,23 +91,18 @@ export function ActionBar() {
         </GhostButton>
       </Hint>
 
-      <GhostButton
-        icon={<Upload size={14} strokeWidth={1.75} />}
-        disabled={!folderId}
-        onClick={() => fileInput.current?.click()}
-      >
-        Upload
-      </GhostButton>
-
-      <input
-        ref={fileInput}
-        type="file"
-        multiple
-        hidden
-        tabIndex={-1}
-        aria-hidden
-        onChange={onPicked}
-      />
+      {/* The picker is the daemon's own native dialog rather than an <input
+          type="file">: the webview only ever learns which nodes landed, never
+          where on disk they came from. */}
+      <Hint label="Import files from this computer">
+        <GhostButton
+          icon={<Import size={14} strokeWidth={1.75} />}
+          disabled={!folderId}
+          onClick={() => void importFiles(folderId ?? undefined)}
+        >
+          Import
+        </GhostButton>
+      </Hint>
 
       {/* The hairline is 16px of the 44px row, so it is sized by a wrapper: `h-full`
           inside Divider then resolves to exactly that, with no utility-order gamble

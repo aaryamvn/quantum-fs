@@ -122,6 +122,12 @@ pub fn set_log_file(path: &Path) -> io::Result<()> {
         options.mode(0o600);
     }
     let file = options.open(path)?;
+    // `mode` only applies when the file is created, so tighten an existing one.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     if let Some(log) = LOG.get() {
         if let Ok(mut state) = log.lock() {
             state.mirror = Some(file);
