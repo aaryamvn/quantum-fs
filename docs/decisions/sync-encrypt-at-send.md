@@ -1,5 +1,5 @@
 # Chunk identity, local store, pull
-status: accepted
+status: superseded-by: docs/decisions/sync-plaintext-chunks.md
 date: 2026-09-12      scope: sync
 decision: >
   Because K_ab is per pair, ciphertext is not reusable. After decrypt, each

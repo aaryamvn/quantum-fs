@@ -1,5 +1,5 @@
 # Identity bind and signatures
-status: accepted
+status: superseded-by: docs/decisions/crypto-identity-selfcert.md
 date: 2026-09-12      scope: crypto
 decision: >
   Each peer’s identity document is (peer_id, ek, vk, created_at) signed by

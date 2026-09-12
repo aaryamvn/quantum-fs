@@ -1,5 +1,5 @@
 # Post-quantum suite and AEAD
-status: accepted
+status: superseded-by: docs/decisions/crypto-pq-hybrid.md
 date: 2026-09-12      scope: crypto
 decision: >
   v1 uses ML-KEM-768 (FIPS 203), ML-DSA-65 (FIPS 204), AES-256-GCM, and

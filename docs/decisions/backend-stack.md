@@ -1,5 +1,5 @@
 # Backend language and crypto libraries
-status: accepted
+status: superseded-by: docs/decisions/backend-stack-xwing.md
 date: 2026-09-12      scope: backend
 decision: >
   The protocol core is Rust, one crate in backend/ until compile time forces

@@ -1,5 +1,5 @@
 # Pairwise AES via ML-KEM wrap (Construction B)
-status: accepted
+status: superseded-by: docs/decisions/crypto-pairwise-aead.md
 date: 2026-09-12      scope: crypto
 decision: >
   Each pair (A, B) has one AES-256-GCM key K_ab. That key encrypts every

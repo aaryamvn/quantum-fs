@@ -1,5 +1,5 @@
 # Designated-member host queue
-status: accepted
+status: superseded-by: docs/decisions/sync-host-tcb.md
 date: 2026-09-12      scope: sync
 decision: >
   The queue is a role on one appointed group member H, not an outside
