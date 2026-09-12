@@ -5,7 +5,7 @@ Private can never be collaborative in today’s day and age. Everything can be s
 
 Proposed solution:
 The world’s first local Google Drive
-Files are distributed across multiple ‘clients’ in the same ‘network’ (network here doesn’t mean an internet network but just a selection of clients to be participants in this file system protocol)
+Files are distributed across multiple ‘clients’ in the same ‘network’ (network here doesn’t mean an internet network but just a selection of clients to be participants in this file system protocol). Term: a network is called a VAULT — see docs/decisions/net-vault-join-directory.md
 Similar to how early-day Napster worked (some clients would have songs preloaded; any nearby clients would first check with clients in their vicinity to see if they have the song they’re looking for, and only then would they otherwise query a server)
 We need to come up with a paradigm to secure the absolute crap out of any files being stored on the clients’ computers such that even they (since the files are owned communally) can not tamper with the files. And if someone deletes a certain file on their end, no other client will ever be able to recover it. Is there some way we can rotate hashes? Or create a physical piece of hardware that users must plug into their computers to use this file system?
 Generally, no server, ever. Maybe?
