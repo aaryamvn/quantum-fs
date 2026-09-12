@@ -3,6 +3,12 @@
 Read this file fully, once per session. Everything else below is loaded on demand.
 Applies to every human and every agent (any model, any vendor). Binding.
 
+## Required agent models
+
+- The primary agent must use GPT-6 Astra (`gpt-6-astra`) for orchestration and strategy.
+- Every subagent must use GPT-5.6 Sol (`gpt-5.6-sol`), including subagents created by other subagents. Set this model explicitly for every delegation.
+- These model assignments apply to every session. Keep orchestration and strategic decisions with the primary Astra agent.
+
 ## 0. What to read, and when
 
 | Need                         | Read                                              | When                                                        |
@@ -57,7 +63,7 @@ Resuming (any model): open the matching active task → read Checkpoint → `git
 - The trail is history, not precedent. Only decisions bind. A done task shows what happened, not what to imitate.
 - Learn "how we do things" from the code, never from done tasks. Read done tasks only for "why".
 - Write facts: what changed, what was verified (command → result), what failed, what is undone. No "we should always…" — that is a decision; put it there or nowhere.
-- Provider-neutral: plain markdown. No model names, tool names, session IDs, or vendor features in any trail file. Another vendor's agent must resume from your checkpoint knowing nothing about your tooling.
+- Provider-neutral trail: task and decision files use plain markdown without model names, tool names, session IDs, or vendor features, except in verbatim human requests. Required model assignments live in this protocol. Another vendor's agent must understand your checkpoint knowing nothing about your tooling.
 - Question the trail. If a checkpoint's plan looks wrong, say so before continuing; do not silently follow it and do not silently deviate.
 
 ## 6. Token and writing discipline
