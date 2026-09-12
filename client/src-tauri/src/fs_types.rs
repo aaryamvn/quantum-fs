@@ -118,6 +118,9 @@ pub struct Vault {
     pub used_bytes: u64,
     /// Bytes of the server's capacity allocated to this vault.
     pub quota_bytes: u64,
+    /// What the vault can actually hold: the server's allocation plus what every member
+    /// lends it from their own disk (`Profile::contribution_bytes`, deduplicated by client).
+    pub capacity_bytes: u64,
     pub role: Role,
 }
 
@@ -203,6 +206,11 @@ pub struct LastEdited {
 #[serde(rename_all = "camelCase")]
 pub struct Member {
     pub peer_id: String,
+    /// The stable per-client id behind this member, or empty when we have not seen one
+    /// (an older client, or a member whose sidecar entry has not replicated yet).
+    pub client_id: String,
+    /// How much disk this member lends the vault; 0 when unknown.
+    pub contribution_bytes: u64,
     pub name: String,
     pub initials: String,
     /// Presence/cursor color as `#RRGGBB`.
@@ -214,6 +222,33 @@ pub struct Member {
     /// Ops waiting to sync while offline.
     pub queued_ops: u32,
     pub is_self: bool,
+}
+
+/* ---------------------------------------------------------------- profile */
+
+/// This client's own identity, as the onboarding sheet and the profile menu read and write it.
+/// One per client, not per vault: `clientId` is derived from the machine and the data
+/// directory and is never persisted (`node::state::client_id`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub client_id: String,
+    pub name: String,
+    pub color: String,
+    /// `false` until a human has actually typed a name: the UI shows onboarding on `false`.
+    pub name_set: bool,
+    /// How much local disk this client lends every vault it belongs to.
+    pub contribution_bytes: u64,
+}
+
+/// What `set_profile` may change. An absent field is left exactly as it was.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfilePatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub contribution_bytes: Option<u64>,
 }
 
 /* ----------------------------------------------------------------- access */

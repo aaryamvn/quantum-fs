@@ -14,6 +14,8 @@
  * the UI feel like Finder, and Finder does not spin.
  */
 
+import { devQuery } from "@/lib/devQuery";
+
 import type { BackendClient } from "../client";
 import type {
   AskAgentInput,
@@ -37,6 +39,7 @@ import type {
   NodeId,
   OrchestrationServer,
   PeerId,
+  ProfilePatch,
   SearchQuery,
   Vault,
   VaultId,
@@ -47,7 +50,7 @@ import type { MockSimulation } from "./engine";
 import { loadSeed } from "./seedLoader";
 
 export { FsEngine } from "./engine";
-export type { MockSimulation } from "./engine";
+export type { FsEngineOptions, MockSimulation } from "./engine";
 export { loadSeed, SEED_SELF } from "./seedLoader";
 export type { FsSeed } from "./seedLoader";
 
@@ -127,7 +130,9 @@ export function createMockBackend(): BackendClient {
     dataDir: null,
   };
 
-  const engine = new FsEngine(loadSeed(), emit, servers);
+  // `?onboard=1` is the design-QA door onto the first launch: the profile starts
+  // unnamed, so the onboarding screen is what the browser opens on.
+  const engine = new FsEngine(loadSeed(), emit, servers, { onboarding: devQuery.onboard });
 
   const client: BackendClient = {
     async status() {
@@ -183,6 +188,9 @@ export function createMockBackend(): BackendClient {
         memberCount: 1,
         usedBytes: 0,
         quotaBytes: input.quotaBytes,
+        // Brand new: this client is its only member, so its pledge is the whole
+        // surplus over the host's quota.
+        capacityBytes: input.quotaBytes + engine.getProfile().contributionBytes,
         role: "owner",
       };
       server.vaults.push(vault);
@@ -207,6 +215,7 @@ export function createMockBackend(): BackendClient {
         memberCount: 1,
         usedBytes: 0,
         quotaBytes: JOINED_VAULT_QUOTA_BYTES,
+        capacityBytes: JOINED_VAULT_QUOTA_BYTES + engine.getProfile().contributionBytes,
         role: "member",
       };
       servers.push({
@@ -234,6 +243,14 @@ export function createMockBackend(): BackendClient {
 
     async me() {
       return engine.me();
+    },
+
+    async getProfile() {
+      return engine.getProfile();
+    },
+
+    async setProfile(patch: ProfilePatch) {
+      return engine.setProfile(patch);
     },
 
     async listTree(vaultId: VaultId) {

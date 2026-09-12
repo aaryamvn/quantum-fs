@@ -5,6 +5,8 @@
 #                deploy the staged app into each and start it
 #   redeploy     re-deploy + relaunch in the already-running guests and on the
 #                host (use after a rebuild; never touches tart run/stop)
+#   provision    push a pre-seeded app data dir into one guest and relaunch
+#   reset-data   wipe every client's app data (host + running guests)
 #   down         stop the guests
 #   host-client  run a third client on this machine (separate data dir)
 #
@@ -21,23 +23,37 @@ APP_TGZ="$DEMO_DIR/QuantumFS.app.tgz"
 BUNDLE="$CLIENT_DIR/src-tauri/target/release/bundle/macos/$APP_NAME"
 VM_COUNT=2
 ACTION=""
+VM_INDEX=""
+DATA_SRC=""
+APP_ID="fs.quantum.app"       # the bundle id the app stores its data under
+FONT_GLOB="GT-Walsheim-*Trial*.otf"
+FONT_TGZ="$DEMO_DIR/gt-walsheim.tgz"
+FONT_COUNT=0
 DIR_PORT=7440                 # central directory port (see demo_servers.sh)
 LAN_IP="${QFS_LAN_IP:-}"
 DIRECTORY_ADDR=""
 
 usage() {
   cat <<'EOF'
-usage: vm-demo.sh build|up|redeploy|down|host-client [--vm-count 2] [--ip LAN_IP]
+usage: vm-demo.sh build|up|redeploy|provision|reset-data|down|host-client
+                  [--vm-count 2] [--vm N] [--data DIR] [--ip LAN_IP]
 
   build        npm run app:build, then stage the bundle in /tmp/qfs-demo/app
   up           start qfs-client-1..N (skipping running ones), deploy the staged
-               app over scp and launch it in-guest
+               app over scp (with the GT Walsheim trial fonts) and launch it
   redeploy     deploy + relaunch in the running guests, then relaunch the host
                client (after a rebuild; does not start or stop any VM)
+  provision    --vm N --data DIR: install DIR as that guest's app data dir
+               (~/Library/Application Support/fs.quantum.app) and relaunch, so
+               the guest owns whatever vaults the seeder created in DIR
+  reset-data   delete the app data, caches and WebKit state of the host client
+               and of every running guest (the apps are killed first)
   down         tart stop each qfs-client-N
   host-client  launch a third client on this host (QFS_DATA_DIR=/tmp/qfs-demo/client-host)
 
   --vm-count N  how many guests to bring up/down (default 2; the framework caps at 2)
+  --vm N        which guest provision targets (qfs-client-N)
+  --data DIR    the seeded app data dir provision installs
   --ip IP       LAN IP of the central directory; every client is launched with
                 QFS_DIRECTORY_ADDR=<ip>:7440 so 6-char join codes resolve
                 (default: auto-detected like demo_servers.sh; env QFS_LAN_IP)
@@ -46,8 +62,10 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    build|up|redeploy|down|host-client) ACTION="$1"; shift ;;
+    build|up|redeploy|down|host-client|provision|reset-data) ACTION="$1"; shift ;;
     --vm-count) VM_COUNT="$2"; shift 2 ;;
+    --vm) VM_INDEX="$2"; shift 2 ;;
+    --data) DATA_SRC="$2"; shift 2 ;;
     --ip) LAN_IP="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "vm-demo.sh: unknown argument '$1'" >&2; usage >&2; exit 2 ;;
@@ -191,6 +209,73 @@ vm_is_running() {
   esac
 }
 
+# The app asks the OS for GT Walsheim through local(), so a guest without the
+# trial faces falls back to the system sans and the splash wordmark looks wrong.
+# The files are not in the repo (trial licence), so they are copied from the
+# host's own ~/Library/Fonts. No faces there = nothing to do, silently.
+stage_fonts() {
+  local list="$DEMO_DIR/.fonts.list" f
+  FONT_COUNT=0
+  rm -f "$FONT_TGZ"
+  mkdir -p "$DEMO_DIR"
+  : >"$list"
+  for f in "$HOME"/Library/Fonts/$FONT_GLOB; do
+    [ -f "$f" ] || continue
+    basename "$f" >>"$list"
+    FONT_COUNT=$(( FONT_COUNT + 1 ))
+  done
+  if [ "$FONT_COUNT" -eq 0 ]; then rm -f "$list"; return 0; fi
+  tar -C "$HOME/Library/Fonts" -czf "$FONT_TGZ" -T "$list"
+  rm -f "$list"
+}
+
+install_fonts_in_guest() {
+  local ip="$1"
+  if [ "$FONT_COUNT" -eq 0 ]; then
+    echo "  fonts: 0 installed"
+    return 0
+  fi
+  guest_scp "$ip" "$FONT_TGZ" "qfs-fonts.tgz"
+  guest_ssh "$ip" 'mkdir -p ~/Library/Fonts && tar -xzf ~/qfs-fonts.tgz -C ~/Library/Fonts && rm -f ~/qfs-fonts.tgz'
+  echo "  fonts: $FONT_COUNT installed"
+}
+
+# Everything one client keeps on disk. Deleting all three is what makes the app
+# come up on the "Hey there, what is your name?" screen again.
+client_data_paths() {
+  printf '%s\n' \
+    "$HOME/Library/Application Support/$APP_ID" \
+    "$HOME/Library/Caches/$APP_ID" \
+    "$HOME/Library/WebKit/$APP_ID"
+}
+
+guest_reset_command() {
+  cat <<'EOF'
+pkill -x quantamfs >/dev/null 2>&1 || true
+sleep 1
+rm -rf ~/Library/Application\ Support/fs.quantum.app \
+       ~/Library/Caches/fs.quantum.app \
+       ~/Library/WebKit/fs.quantum.app
+echo "  guest data cleared"
+EOF
+}
+
+# Replace the guest's app data dir with the tarball we just scp'd in. The app is
+# stopped first: it holds an exclusive lock on every vault keystore.
+guest_provision_command() {
+  cat <<'EOF'
+set -e
+pkill -x quantamfs >/dev/null 2>&1 || true
+sleep 1
+DEST="$HOME/Library/Application Support/fs.quantum.app"
+rm -rf "$DEST" "$HOME/Library/Caches/fs.quantum.app" "$HOME/Library/WebKit/fs.quantum.app"
+mkdir -p "$DEST"
+tar -xzf ~/qfs-client-data.tgz -C "$DEST"
+rm -f ~/qfs-client-data.tgz
+echo "  data dir installed ($(find "$DEST" -type f | wc -l | tr -d ' ') files)"
+EOF
+}
+
 # One tarball, reused for every guest. The virtiofs share (--dir) goes stale
 # whenever the host directory is recreated, so the copy goes over scp instead.
 stage_tarball() {
@@ -205,6 +290,7 @@ deploy_to_guests() {
   deploy="$(guest_deploy_command)"
   launch="$(guest_launch_command "$DIRECTORY_ADDR")"
   stage_tarball
+  stage_fonts
   for n in $(seq 1 "$VM_COUNT"); do
     vm="qfs-client-$n"
     echo "waiting for $vm to get an IP..."
@@ -214,6 +300,7 @@ deploy_to_guests() {
     guest_scp "$ip" "$APP_TGZ" "QuantumFS.app.tgz"
     echo "  unpacking + signing..."
     guest_ssh "$ip" "$deploy"
+    install_fonts_in_guest "$ip"
     echo "  launching..."
     guest_ssh "$ip" "$launch"
     echo "$vm  app launched in a guest Terminal (log: ~/qfs-client.log)"
@@ -271,6 +358,78 @@ do_redeploy() {
   do_host_client
 }
 
+# Install a seeded data dir (from the headless seeder) into one guest, so that
+# guest owns those vaults when it starts. The launch command is the same one
+# `up` uses, QFS_DIRECTORY_ADDR included.
+do_provision() {
+  require_directory_addr
+  if [ -z "$VM_INDEX" ] || [ -z "$DATA_SRC" ]; then
+    echo "vm-demo.sh: provision needs --vm N and --data DIR" >&2
+    exit 2
+  fi
+  if [ ! -d "$DATA_SRC" ]; then
+    echo "vm-demo.sh: --data $DATA_SRC is not a directory" >&2
+    exit 1
+  fi
+  local vm ip tgz
+  vm="qfs-client-$VM_INDEX"
+  mkdir -p "$DEMO_DIR"
+  tgz="$DEMO_DIR/client-data-$VM_INDEX.tgz"
+  echo "packing $DATA_SRC..."
+  rm -f "$tgz"
+  # Contents, not the directory itself: it lands as fs.quantum.app in the guest.
+  tar -C "$DATA_SRC" -czf "$tgz" .
+  echo "waiting for $vm to get an IP..."
+  ip="$(tart ip "$vm" --wait 120)"
+  echo "$vm  $ip"
+  echo "  copying the data dir..."
+  guest_scp "$ip" "$tgz" "qfs-client-data.tgz"
+  echo "  installing..."
+  guest_ssh "$ip" "$(guest_provision_command)"
+  echo "  relaunching..."
+  guest_ssh "$ip" "$(guest_launch_command "$DIRECTORY_ADDR")"
+  echo "$vm  provisioned from $DATA_SRC"
+}
+
+# A clean slate for every client: no profile, no servers, no vaults. Guests that
+# are not running are skipped (nothing of theirs is reachable).
+do_reset_data() {
+  local path n vm ip
+  echo "host:"
+  while IFS= read -r path; do
+    if [ -e "$path" ]; then
+      rm -rf "$path"
+      echo "  removed $path"
+    else
+      echo "  absent  $path"
+    fi
+  done <<EOF
+$(client_data_paths)
+EOF
+  pkill -f "$APP_STAGE/$APP_NAME/$APP_BIN" >/dev/null 2>&1 || true
+  if [ -e "$DEMO_DIR/client-host" ]; then
+    rm -rf "$DEMO_DIR/client-host"
+    echo "  removed $DEMO_DIR/client-host"
+  else
+    echo "  absent  $DEMO_DIR/client-host"
+  fi
+
+  for n in $(seq 1 "$VM_COUNT"); do
+    vm="qfs-client-$n"
+    if ! vm_is_running "$vm"; then
+      echo "$vm: not running -- skipped"
+      continue
+    fi
+    ip="$(tart ip "$vm" --wait 60 2>/dev/null || true)"
+    if [ -z "$ip" ]; then
+      echo "$vm: no IP -- skipped"
+      continue
+    fi
+    echo "$vm ($ip):"
+    guest_ssh "$ip" "$(guest_reset_command)" || echo "  reset failed"
+  done
+}
+
 do_down() {
   local n vm
   for n in $(seq 1 "$VM_COUNT"); do
@@ -295,6 +454,8 @@ case "$ACTION" in
   build)       do_build ;;
   up)          do_up ;;
   redeploy)    do_redeploy ;;
+  provision)   do_provision ;;
+  reset-data)  do_reset_data ;;
   down)        do_down ;;
   host-client) do_host_client ;;
 esac

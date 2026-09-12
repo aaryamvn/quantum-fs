@@ -96,7 +96,7 @@ const FADE = {
 };
 
 export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): void }) {
-  const { servers, addServer } = useBackend();
+  const { addServer } = useBackend();
   const [address, setAddress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -136,12 +136,16 @@ export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): 
     if (!valid || busy || added) return;
     setBusy(true);
     setError(null);
+    // The host half of the connect string, without the key. It is both the name
+    // the server is stored under — every surface labels a server by its address,
+    // so an invented "Server 3" would be a name nothing ever shows — and the
+    // confirmation text: the token was a secret one second ago, and leaving it
+    // on screen is the one thing this panel can do wrong.
+    const slash = value.indexOf("/");
+    const host = slash === -1 ? value : value.slice(0, slash);
     try {
-      await addServer({ name: `Server ${servers.length + 1}`, address: value });
-      // The confirmation names the host, not the key: the token was a secret one
-      // second ago and leaving it on screen is the one thing this panel can do wrong.
-      const slash = value.indexOf("/");
-      setAdded(slash === -1 ? value : value.slice(0, slash));
+      await addServer({ name: host, address: value });
+      setAdded(host);
       timer.current = setTimeout(onClose, CONFIRM_MS);
     } catch (e) {
       // The daemon's own sentence, verbatim: "bad token", "connection refused"
@@ -157,7 +161,7 @@ export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): 
     <Modal
       open={open}
       onClose={onClose}
-      title="Setup New Server"
+      title="Add a Server"
       description={
         added ? undefined : "Paste the connect string printed by the vault server (ip:port/KEY)"
       }
@@ -190,7 +194,7 @@ export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): 
             ) : null}
             <div className="mt-[16px]">
               <PrimaryButton onClick={() => void submit()} disabled={!valid || busy}>
-                Add Server
+                Add
               </PrimaryButton>
             </div>
           </motion.div>

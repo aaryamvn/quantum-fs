@@ -132,7 +132,7 @@ export function CodeInput({
               commit(merged);
               focus(merged.length);
             }}
-            className="h-[52px] min-w-0 flex-1 basis-0 rounded-[10px] border bg-bg text-center text-[20px] font-medium text-fg uppercase outline-none
+            className="h-[52px] min-w-0 flex-1 basis-0 rounded-[10px] border bg-field text-center text-[20px] font-medium text-fg uppercase outline-none
               transition-[border-color] duration-[160ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]
               selection:bg-white/20 selection:text-fg"
             style={{ borderColor: border }}

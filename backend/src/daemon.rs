@@ -21,8 +21,9 @@ use crate::{
         admin::{serve_admin, AdminContext},
         directory::{serve as serve_directory, DirectoryClient, DirectoryStore},
         join::{join_host, serve_host, unix_time, VaultHost},
+        profiles::{serve as serve_profiles, ProfileStore},
         vaults::VaultSet,
-        JoinCode,
+        JoinCode, VaultId,
     },
     store::vaults::{create_vault_dir, discover_vaults, migrate_legacy},
     sync::host::{HostService, MemberReplica},
@@ -36,6 +37,11 @@ pub fn detect_lan_ip() -> Option<IpAddr> {
     socket.connect((Ipv4Addr::new(8, 8, 8, 8), 53)).ok()?;
     Some(socket.local_addr().ok()?.ip())
 }
+
+/// A healthy host refreshes its directory ads at this interval; a host whose
+/// last publish failed retries far more often until the directory answers.
+const REPUBLISH_INTERVAL_SECS: u64 = 60;
+const REPUBLISH_RETRY_SECS: u64 = 5;
 
 /// H is a role of an authenticated member, never a separate process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,15 +117,30 @@ async fn run_inner(config: Config) -> Result<()> {
         let advertise = advertise_addr(&config, local_addr);
         if !directories.is_empty() || config.directory_addr.is_some() {
             let vaults = VaultSet::new(keys.clone())?;
+            let mut unreachable = BTreeSet::new();
             for (id, directory) in directories {
                 let mut vault =
                     VaultHost::open_durable(keys.clone(), &directory.join("vault"), &directory)?;
                 if let Some(directory_addr) = config.directory_addr {
                     // Re-advertise existing codes after bind too: an ephemeral
                     // port or explicit NAT address can change across restarts.
-                    vault
+                    // A directory that is down is a warning, never a reason to
+                    // stop serving: the refresh below keeps trying.
+                    if let Err(error) = vault
                         .publish(&DirectoryClient::new(directory_addr), advertise)
-                        .await?;
+                        .await
+                    {
+                        unreachable.insert(id);
+                        demo_log::event(
+                            Kind::Sync,
+                            "TCP",
+                            format!(
+                                "Directory unreachable; will retry | vault {} | reason {error}",
+                                short_vault(id)
+                            ),
+                            &[],
+                        );
+                    }
                 }
                 if Some(id) == new_id {
                     demo_log::event(
@@ -138,6 +159,9 @@ async fn run_inner(config: Config) -> Result<()> {
                 &[format!("vaults  {}", vaults.vaults().len())],
             );
             start_admin(&config, &keys, vaults.clone(), local_addr, advertise).await?;
+            if let Some(directory_addr) = config.directory_addr {
+                start_republish(vaults.clone(), directory_addr, advertise, unreachable);
+            }
             return run_vaults(listener, vaults, wraps, &mut shutdown).await;
         }
     }
@@ -199,6 +223,70 @@ fn advertise_addr(config: &Config, local_addr: SocketAddr) -> SocketAddr {
     }
 }
 
+fn short_vault(vault_id: VaultId) -> String {
+    crate::net::admin::hex(&vault_id.0)
+        .chars()
+        .take(12)
+        .collect()
+}
+
+/// A host stays useful while the directory is down and re-advertises on its own
+/// once it returns. Only state changes are logged, so a healthy run stays quiet.
+fn start_republish(
+    vaults: VaultSet,
+    directory_addr: SocketAddr,
+    advertise: SocketAddr,
+    initially_unreachable: BTreeSet<VaultId>,
+) {
+    tokio::task::spawn_local(async move {
+        let directory = DirectoryClient::new(directory_addr);
+        let mut failing = initially_unreachable;
+        loop {
+            let interval = if failing.is_empty() {
+                REPUBLISH_INTERVAL_SECS
+            } else {
+                REPUBLISH_RETRY_SECS
+            };
+            tokio::time::sleep(Duration::from_secs(interval)).await;
+            let hosted = vaults.vaults();
+            let served: BTreeSet<VaultId> = hosted.iter().map(|v| v.borrow().vault_id()).collect();
+            failing.retain(|id| served.contains(id));
+            for vault in hosted {
+                let id = vault.borrow().vault_id();
+                match VaultHost::republish(&vault, &directory, advertise).await {
+                    // A clock second that has not advanced is not an outage.
+                    Ok(()) | Err(Error::ReplayRejected) => {
+                        if failing.remove(&id) {
+                            demo_log::event(
+                                Kind::Sync,
+                                "TCP",
+                                format!(
+                                    "Directory reachable; vault route republished | vault {}",
+                                    short_vault(id)
+                                ),
+                                &[],
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        if failing.insert(id) {
+                            demo_log::event(
+                                Kind::Sync,
+                                "TCP",
+                                format!(
+                                    "Directory unreachable; will retry | vault {} | reason {error}",
+                                    short_vault(id)
+                                ),
+                                &[],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// Owner-only token file so a restart keeps the app's saved connect string.
 fn load_or_create_admin_token(config: &Config) -> Result<String> {
     if let Some(token) = &config.admin_token {
@@ -258,27 +346,68 @@ async fn start_admin(
         ],
     );
     eprintln!("qfsd: app connect string {connect}");
-    let context = AdminContext {
-        token,
-        vaults,
-        keys: keys.clone(),
-        data_dir: config.data_dir.clone(),
-        directory: config.directory_addr.map(DirectoryClient::new),
-        directory_addr: config.directory_addr,
-        advertise_addr: advertise,
-        capacity_bytes: config.capacity_bytes,
-    };
+    let keys = keys.clone();
+    let data_dir = config.data_dir.clone();
+    let directory_addr = config.directory_addr;
+    let capacity_bytes = config.capacity_bytes;
     tokio::task::spawn_local(async move {
-        if let Err(error) = serve_admin(listener, context).await {
+        let mut listener = listener;
+        loop {
+            let context = AdminContext {
+                token: token.clone(),
+                vaults: vaults.clone(),
+                keys: keys.clone(),
+                data_dir: data_dir.clone(),
+                directory: directory_addr.map(DirectoryClient::new),
+                directory_addr,
+                advertise_addr: advertise,
+                capacity_bytes,
+            };
+            let reason = match serve_admin(listener, context).await {
+                Ok(()) => "listener ended".to_owned(),
+                Err(error) => error.to_string(),
+            };
             demo_log::event(
-                Kind::Warning,
+                Kind::Sync,
                 "LOCAL",
-                "qfsd: admin port stopped",
-                &[format!("reason  {error}")],
+                "qfsd: admin port restarting",
+                &[format!("reason  {reason}")],
             );
+            listener = rebind_admin(admin_addr).await;
         }
     });
     Ok(())
+}
+
+/// The desktop app reconnects every second, so a host that lost its admin port
+/// keeps reclaiming it instead of going dark for the rest of the session.
+async fn rebind_admin(addr: SocketAddr) -> TcpListener {
+    let mut reported = false;
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        match TcpListener::bind(addr).await {
+            Ok(listener) => {
+                demo_log::event(
+                    Kind::Lifecycle,
+                    "LOCAL",
+                    format!("qfsd: admin port listening {addr}"),
+                    &[],
+                );
+                return listener;
+            }
+            Err(error) => {
+                if !reported {
+                    reported = true;
+                    demo_log::event(
+                        Kind::Sync,
+                        "LOCAL",
+                        format!("qfsd: admin port unavailable; retrying | address {addr}"),
+                        &[format!("reason  {error}")],
+                    );
+                }
+            }
+        }
+    }
 }
 
 async fn run_directory(config: &Config, shutdown: &mut Shutdown) -> Result<()> {
@@ -308,12 +437,66 @@ async fn run_directory(config: &Config, shutdown: &mut Shutdown) -> Result<()> {
         &["paste this as the app's central server".to_owned()],
     );
     eprintln!("qfsd: directory address {reachable}");
+    start_profiles(config, local_addr, reachable).await;
     tokio::select! {
         result = serve_directory(listener, store) => result?,
         result = shutdown.wait() => result?,
     }
     demo_log::event(Kind::Lifecycle, "LOCAL", "qfsd: shutdown complete", &[]);
     Ok(())
+}
+
+/// The profile port sits beside the directory: the explicit flag, else the
+/// directory's own bind IP with its bound port plus 1000.
+fn profile_bind_addr(config: &Config, local_addr: SocketAddr) -> Option<SocketAddr> {
+    if let Some(addr) = config.profile_addr {
+        return Some(addr);
+    }
+    Some(SocketAddr::new(
+        local_addr.ip(),
+        local_addr.port().checked_add(1000)?,
+    ))
+}
+
+/// Display names are cosmetic. Nothing about this port is fatal to the
+/// directory, and nothing it reports is an incident.
+async fn start_profiles(config: &Config, local_addr: SocketAddr, reachable: SocketAddr) {
+    let Some(bind) = profile_bind_addr(config, local_addr) else {
+        demo_log::event(
+            Kind::Sync,
+            "LOCAL",
+            "qfsd: profile port skipped | listen port too high for the default; pass --profile-addr",
+            &[],
+        );
+        return;
+    };
+    let listener = match TcpListener::bind(bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            demo_log::event(
+                Kind::Sync,
+                "LOCAL",
+                format!("qfsd: profile port unavailable | address {bind} | reason {error}"),
+                &[],
+            );
+            return;
+        }
+    };
+    let port = listener
+        .local_addr()
+        .map_or(bind.port(), |addr| addr.port());
+    let store = Rc::new(RefCell::new(ProfileStore::open(
+        &config.data_dir.join("profiles.json"),
+    )));
+    let advertised = SocketAddr::new(reachable.ip(), port);
+    demo_log::event(
+        Kind::Lifecycle,
+        "LOCAL",
+        format!("qfsd: profile address {advertised}"),
+        &["stores cosmetic display names only".to_owned()],
+    );
+    eprintln!("qfsd: profile address {advertised}");
+    tokio::task::spawn_local(serve_profiles(listener, store));
 }
 
 async fn run_vaults(
@@ -454,8 +637,10 @@ async fn run_idle_member(
 
 async fn reject_inbound(listener: TcpListener) -> Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
-        drop(stream);
+        match listener.accept().await {
+            Ok((stream, _)) => drop(stream),
+            Err(error) => crate::net::listener_hiccup(&error).await,
+        }
     }
 }
 

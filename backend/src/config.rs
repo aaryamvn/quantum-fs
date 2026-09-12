@@ -45,6 +45,10 @@ pub struct Config {
     /// Fixed admin token; by default one is generated in data_dir/admin-token.
     #[arg(long, value_name = "TOKEN")]
     pub admin_token: Option<String>,
+    /// Display-name store served beside a directory, for the app's roster.
+    /// Defaults to the directory's bind IP with the listen port plus 1000.
+    #[arg(long, value_name = "SOCKET_ADDR")]
+    pub profile_addr: Option<SocketAddr>,
     /// Storage this server advertises to the app, in bytes (default 32 GiB).
     #[arg(long, default_value_t = 34_359_738_368)]
     pub capacity_bytes: u64,

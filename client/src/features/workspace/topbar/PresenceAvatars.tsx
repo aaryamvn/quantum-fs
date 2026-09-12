@@ -109,18 +109,20 @@ export function PresenceAvatars({ max = 4 }: { max?: number }) {
     <div data-testid="presence-avatars" className="flex items-center">
       <AnimatePresence initial={false}>
         {visible.map((entry, i) => {
-          const { member, online, idle } = entry;
-          const opacity = idle && online ? 0.7 : 1;
+          const { member, online } = entry;
+          // Only the entrance and exit use opacity. Idle used to sit at 0.7, but a
+          // translucent face in a stack shows the face beneath it through itself;
+          // presence is carried by the dot and the popover line instead.
           const anim = reduced
             ? {
                 initial: { opacity: 0 },
-                animate: { opacity, transition: { duration: 0 } },
+                animate: { opacity: 1, transition: { duration: 0 } },
                 exit: { opacity: 0, transition: { duration: 0 } },
               }
             : {
                 initial: { opacity: 0, scale: 0.6 },
                 animate: {
-                  opacity,
+                  opacity: 1,
                   scale: 1,
                   transition: { type: "spring" as const, stiffness: 500, damping: 30 },
                 },
@@ -149,7 +151,10 @@ export function PresenceAvatars({ max = 4 }: { max?: number }) {
               onBlur={closeSoon}
               className={`relative grid size-[24px] shrink-0 place-items-center rounded-full
                 focus-visible:outline-none ${i === 0 ? "" : "-ml-[6px]"}`}
-              style={{ boxShadow: "0 0 0 2px var(--color-bg)" }}
+              // Left-most on top. DOM order alone would lay the stack the other
+              // way — each face over the one before it — which puts the last
+              // avatar, and the overflow disc, in front of the first.
+              style={{ zIndex: visible.length - i, boxShadow: "0 0 0 2px var(--color-bg)" }}
             >
               <Avatar
                 peerId={member.peerId}
@@ -165,9 +170,8 @@ export function PresenceAvatars({ max = 4 }: { max?: number }) {
       </AnimatePresence>
 
       {/*
-        Last in the DOM *and* above the row: the faces are positioned at auto, so
-        a positive z-index is what lifts this disc clear of the avatar it laps.
-        A half-covered overflow handle is a target people miss.
+        The bottom of the stack: the row reads left-to-right with each disc
+        tucked under the one before it, and this is the right-most thing in it.
       */}
       {hidden.length > 0 ? (
         <button
@@ -184,7 +188,7 @@ export function PresenceAvatars({ max = 4 }: { max?: number }) {
             border border-line-strong bg-white/[0.08] text-[10.5px] text-fg-2
             transition-colors duration-[160ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]
             hover:text-fg focus-visible:outline-none"
-          style={{ zIndex: visible.length + 1, boxShadow: "0 0 0 2px var(--color-bg)" }}
+          style={{ zIndex: 0, boxShadow: "0 0 0 2px var(--color-bg)" }}
         >
           +{hidden.length}
         </button>

@@ -38,15 +38,25 @@ Layout:
 - fonts                     GT Walsheim Trial, loaded from the OS via `local()` (trial licence — no font files in the repo)
 
 Demo (three clients, two Tart macOS guests + this host):
-- `backend/scripts/demo_servers.sh start` — central directory + orchestration servers A and B,
-  each in its own Terminal window. It prints `DIRECTORY`, `SERVER A` and `SERVER B`; the two
-  server lines are the `IP:PORT/TOKEN` connect strings you paste into the app's "Add server".
-  `demo_servers.sh status` shows which ports are up, `stop` shuts them down (data kept).
-- `client/scripts/vm-demo.sh build && client/scripts/vm-demo.sh up` — bundles the app into
-  `/tmp/qfs-demo/app`, boots `qfs-client-1` and `qfs-client-2`, copies the app in over the
-  `qfs` share and starts it in a guest Terminal (guest login `admin`/`admin`; it prints each
-  guest IP). `vm-demo.sh down` stops the guests.
-- `client/scripts/vm-demo.sh host-client` — the third client, on this machine, in its own
-  Terminal with `QFS_DATA_DIR=/tmp/qfs-demo/client-host`.
+- `backend/scripts/demo_servers.sh wipe` — stop everything and delete the servers, logs, seed
+  tree, seeder data dir and every `client-*` dir under `/tmp/qfs-demo` (the built app is kept).
+- `backend/scripts/demo_servers.sh start` — central directory + servers A and B, each in its own
+  Terminal window under `demo_supervise.sh`: the node restarts two seconds after any exit and the
+  whole loop holds a `caffeinate -dimsu` assertion, so nothing sleeps or dies mid-demo. It writes
+  `/tmp/qfs-demo/connect.txt` (`DIRECTORY`, `SERVER_A`, `SERVER_B` — the `IP:PORT/TOKEN` strings
+  the app's "Add a Server" field takes). `stop` creates the stop flag and kills them, `status`
+  lists ports 7440/8440/7447/8447/7448/8448.
+- `python3 client/scripts/gen-seed-tree.py --out /tmp/qfs-demo/seed` — the demo content: six
+  vaults of real .docx/.xlsx/.pptx/.pdf/.png plus code, data and prose, deterministic per seed.
+- Seed the servers and build one client's state, from `client/src-tauri`:
+  `QFS_SEED_SERVERS="$A,$B" QFS_DATA_DIR=/tmp/qfs-demo/client-vm1 \`
+  `cargo test --release --test seed_demo -- --nocapture`
+  (`QFS_SEED_ROOT`, `QFS_DIRECTORY_ADDR` and `QFS_SEED_QUOTA_BYTES` override the defaults; it
+  prints one `SEEDED …` line per vault and the `DATA_DIR` to provision from.)
+- `client/scripts/vm-demo.sh build` bundles the app into `/tmp/qfs-demo/app`; `reset-data` wipes
+  the host client's and every running guest's app data; `up` boots `qfs-client-1..2`, installs
+  the GT Walsheim trial faces and launches the app; `provision --vm 1 --data /tmp/qfs-demo/client-vm1`
+  installs a seeded data dir into a guest and relaunches it; `redeploy` re-pushes after a rebuild;
+  `down` stops the guests; `host-client` runs the third client here.
 Apple's Virtualization framework runs at most two macOS guests at once, which is why client 3
 lives on the host rather than in a third VM.

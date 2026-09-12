@@ -61,6 +61,8 @@ import type {
   OrchestrationServer,
   PeerId,
   PeerPresence,
+  Profile,
+  ProfilePatch,
   Recent,
   RemoteOp,
   SearchHit,
@@ -99,6 +101,9 @@ const MAX_RECENTS = 8;
 /** Same ceiling the home screen's create-vault field enforces. */
 const MAX_VAULT_NAME = 40;
 
+/** A person's name is a label, not an essay; the same ceiling the field enforces. */
+const MAX_PERSON_NAME = 40;
+
 /** Crockford-ish base32 minus the ambiguous glyphs: what a join code is spelled with. */
 const JOIN_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const JOIN_CODE_LENGTH = 6;
@@ -121,6 +126,17 @@ export interface MockSimulation {
   reset(vaultId: VaultId): void;
 }
 
+/**
+ * The two letters an avatar falls back to: first letter of the first word and of
+ * the last, or the first two letters when there is only one word.
+ */
+function initialsOf(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
 /** `Math.min(Math.max(...))`, named, because the download curve reads better with it. */
 function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
@@ -140,6 +156,17 @@ function makeRandom(seed: number): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+/** What the mock may set up differently from the fixture, for design QA. */
+export interface FsEngineOptions {
+  /**
+   * Start as a machine that has never been named: `profile.nameSet` is false and
+   * `profile.name` empty, so the onboarding screen is what the app opens on.
+   * Only the profile is blank — the seeded member lists keep their names, which
+   * is exactly the state a real first launch into an existing vault is in.
+   */
+  onboarding?: boolean;
 }
 
 export class FsEngine {
@@ -168,6 +195,9 @@ export class FsEngine {
   private readonly random: () => number;
 
   readonly self: PeerId;
+
+  /** The local person, as the daemon would hold them. Never touches `localStorage`. */
+  private readonly profile: Profile;
 
   /**
    * Everything the demo may do that the public seam cannot express.
@@ -199,7 +229,12 @@ export class FsEngine {
    * @param servers the mock's live server list — membership counts, vault names
    * and vault removal have to be reflected there or the home screen goes stale.
    */
-  constructor(seed: FsSeed, emit: (e: BackendEvent) => void, servers: OrchestrationServer[]) {
+  constructor(
+    seed: FsSeed,
+    emit: (e: BackendEvent) => void,
+    servers: OrchestrationServer[],
+    options: FsEngineOptions = {},
+  ) {
     this.emit = emit;
     this.servers = servers;
     this.self = seed.self;
@@ -242,6 +277,21 @@ export class FsEngine {
       }
       this.presence.set(vaultId, byPeer);
     }
+
+    // A vault holds its host quota plus whatever its members pledge, and the seed
+    // keeps the member lists — so the numbers on the home rows are derived here
+    // rather than hand-copied into two files.
+    for (const vaultId of this.members.keys()) this.syncCapacity(vaultId);
+
+    // The profile is the self member seen from this machine's side.
+    const self = this.selfMember();
+    this.profile = {
+      clientId: self?.clientId ?? "client_mock_self",
+      name: options.onboarding ? "" : (self?.name ?? ""),
+      color: self?.color ?? "#FF7B7B",
+      nameSet: !options.onboarding,
+      contributionBytes: self?.contributionBytes ?? 0,
+    };
   }
 
   // ---------------------------------------------------------------- internals
@@ -456,6 +506,28 @@ export class FsEngine {
     const row = this.vaultRow(vaultId);
     if (!row) return;
     row.server.vaults[row.index].memberCount = (this.members.get(vaultId) ?? []).length;
+    this.syncCapacity(vaultId);
+  }
+
+  /** A vault holds its quota plus every member's pledge; a leaver takes theirs away. */
+  private syncCapacity(vaultId: VaultId): void {
+    const row = this.vaultRow(vaultId);
+    if (!row) return;
+    const vault = row.server.vaults[row.index];
+    const members = this.members.get(vaultId) ?? [];
+    vault.capacityBytes =
+      vault.quotaBytes + members.reduce((sum, m) => sum + (m.contributionBytes ?? 0), 0);
+  }
+
+  /** This client's own row, from whichever vault list carries it first. */
+  private selfMember(): Member | null {
+    const primary = (this.members.get("vlt_1_1") ?? []).find((m) => m.isSelf);
+    if (primary) return primary;
+    for (const list of this.members.values()) {
+      const found = list.find((m) => m.isSelf);
+      if (found) return found;
+    }
+    return null;
   }
 
   private memberOf(vaultId: VaultId, peerId: PeerId): Member {
@@ -474,13 +546,54 @@ export class FsEngine {
   // ------------------------------------------------------------------ reading
 
   me(): Member {
-    const primary = (this.members.get("vlt_1_1") ?? []).find((m) => m.isSelf);
-    if (primary) return structuredClone(primary);
-    for (const list of this.members.values()) {
-      const found = list.find((m) => m.isSelf);
-      if (found) return structuredClone(found);
+    const self = this.selfMember();
+    if (!self) throw new Error("No local member in the seed");
+    return structuredClone(self);
+  }
+
+  getProfile(): Profile {
+    return structuredClone(this.profile);
+  }
+
+  /**
+   * Rename this machine's person, and/or change what it pledges.
+   *
+   * The profile is not a second copy of the member list: a new name is written
+   * onto the self row of every vault at once (initials included), so `me()`, the
+   * avatars and the member lists can never disagree about who this is.
+   */
+  setProfile(patch: ProfilePatch): Profile {
+    if (patch.name !== undefined) {
+      const name = patch.name.trim();
+      if (name.length === 0) throw new Error("Enter your name");
+      if (name.length > MAX_PERSON_NAME) throw new Error("That name is too long");
+      this.profile.name = name;
+      this.profile.nameSet = true;
+      for (const [vaultId, list] of this.members) {
+        const self = list.find((m) => m.isSelf);
+        if (!self) continue;
+        self.name = name;
+        self.initials = initialsOf(name);
+        this.emit({ type: "members-changed", vaultId });
+      }
     }
-    throw new Error("No local member in the seed");
+
+    if (patch.contributionBytes !== undefined) {
+      const bytes = Math.max(0, Math.floor(patch.contributionBytes));
+      this.profile.contributionBytes = bytes;
+      for (const [vaultId, list] of this.members) {
+        const self = list.find((m) => m.isSelf);
+        if (!self) continue;
+        self.contributionBytes = bytes;
+        this.syncCapacity(vaultId);
+        this.emit({ type: "members-changed", vaultId });
+      }
+      // Every vault row's capacity just moved, and the home list reads them.
+      this.emit({ type: "servers-changed" });
+    }
+
+    this.emit({ type: "profile-changed", profile: structuredClone(this.profile) });
+    return structuredClone(this.profile);
   }
 
   listTree(vaultId: VaultId): FsNode[] {

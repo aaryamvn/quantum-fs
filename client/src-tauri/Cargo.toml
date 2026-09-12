@@ -20,6 +20,9 @@ serde_json = "1"
 # writes its own hex/Base32 helpers rather than pulling more dependencies in.
 quantam-fs = { path = "../../backend" }
 tokio = { version = "1", features = ["rt", "sync", "macros", "time", "net", "io-util"] }
+# One exception to the note above: the client id is a SHA-256 of machine + data dir, and the
+# backend already builds `sha2` (it exposes no general-purpose digest of its own).
+sha2 = "0.10"
 
 # Snappy dev builds: our crate lightly optimized, dependencies more so.
 # Incremental compilation stays on (cargo's default for dev).

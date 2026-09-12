@@ -59,6 +59,8 @@ export type {
   PeerCursor,
   PeerId,
   PeerPresence,
+  Profile,
+  ProfilePatch,
   Recent,
   RemoteOp,
   SearchHit,

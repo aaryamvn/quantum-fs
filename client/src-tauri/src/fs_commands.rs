@@ -19,8 +19,8 @@ use crate::node::Node;
 use crate::fs_types::{
     AgentReply, AskAgentInput, CreateNodeInput, DeleteNodesInput, DuplicateNodesInput, FsNode,
     HistoryEvent, ImportFilesInput, Member, MemberRole, MoveNodesInput, NodeAccess, PeerPresence,
-    PresenceInput, Recent, RenameNodeInput, SetAccessInput, SetNodeColorInput, VaultMeta,
-    VaultMetaPatch,
+    PresenceInput, Profile, ProfilePatch, Recent, RenameNodeInput, SetAccessInput,
+    SetNodeColorInput, VaultMeta, VaultMetaPatch,
 };
 
 /// The OS file picker, as AppleScript. `choose file` returns aliases, so the POSIX paths are
@@ -33,6 +33,18 @@ const CHOOSE_FILES_SCRIPT: &str = "set fs to choose file with multiple selection
 #[tauri::command]
 pub async fn me(node: State<'_, Node>) -> Result<Member, String> {
     node.me().await
+}
+
+/// This client's own name, colour and storage contribution.
+#[tauri::command]
+pub async fn get_profile(node: State<'_, Node>) -> Result<Profile, String> {
+    node.get_profile().await
+}
+
+/// Name this client, or change what it lends every vault. Emits `backend://profile-changed`.
+#[tauri::command]
+pub async fn set_profile(node: State<'_, Node>, patch: ProfilePatch) -> Result<Profile, String> {
+    node.set_profile(patch).await
 }
 
 #[tauri::command]

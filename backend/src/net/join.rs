@@ -248,6 +248,33 @@ impl VaultHost {
         self.host.set_admission(metadata)?;
         Ok(ad)
     }
+
+    /// Re-advertise an already hosted vault. The borrow is released before any
+    /// directory I/O — exactly as a rotation does — so a periodic refresh can
+    /// never collide with a live handshake on the same vault. `issued_at`
+    /// always advances, so the directory's monotonic watermark accepts it.
+    pub async fn republish(
+        vault: &Rc<RefCell<Self>>,
+        directory: &DirectoryClient,
+        addr: SocketAddr,
+    ) -> Result<()> {
+        let (code, ad) = {
+            let mut state = vault.borrow_mut();
+            let mut metadata = state.admission().clone();
+            let issued_at = unix_time()?.max(
+                metadata
+                    .issued_at
+                    .checked_add(1)
+                    .ok_or(Error::State("ad timestamp exhausted"))?,
+            );
+            let ad = DirectoryAd::sign(&state.keys, metadata.vault_id, addr, issued_at)?;
+            let code = metadata.join_code;
+            metadata.issued_at = issued_at;
+            state.host.set_admission(metadata)?;
+            (code, ad)
+        };
+        directory.put(code, &ad).await
+    }
     pub async fn rotate_code(
         vault: &Rc<RefCell<Self>>,
         directory: &DirectoryClient,
@@ -455,9 +482,16 @@ where
     let handshakes = Rc::new(RefCell::new(BTreeSet::new()));
     loop {
         let _ = vaults.take_disconnects();
-        let (mut stream, _) = tokio::select! {
-            accepted = listener.accept() => accepted?,
+        let accepted = tokio::select! {
+            accepted = listener.accept() => accepted,
             _ = tokio::time::sleep(Duration::from_millis(25)) => continue,
+        };
+        let (mut stream, _) = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                crate::net::listener_hiccup(&error).await;
+                continue;
+            }
         };
         let Some(connection) = CounterPermit::acquire(&connections, MAX_CONNECTIONS) else {
             continue;
@@ -620,14 +654,53 @@ where
                 Err(_) => Err(Error::State("handshake deadline exceeded")),
             };
             if let Err(error) = result {
-                demo_log::event(
-                    Kind::Warning,
-                    "TCP",
-                    "qfsd: peer connection closed",
-                    &[format!("reason  {error}")],
-                );
+                report_peer_close(&error);
             }
         });
+    }
+}
+
+/// Port probes, kicked or unknown peers, and ordinary hang-ups are routine on a
+/// LAN demo; only a crypto, decode or storage failure is worth an ATTENTION
+/// line. Benign closes stay on the cyan PEERS stream as one short line.
+fn report_peer_close(error: &Error) {
+    match benign_close(error) {
+        Some(headline) => demo_log::event(Kind::Membership, "TCP", headline, &[]),
+        None => demo_log::event(
+            Kind::Warning,
+            "TCP",
+            "qfsd: peer connection closed",
+            &[format!("reason  {error}")],
+        ),
+    }
+}
+
+fn benign_close(error: &Error) -> Option<&'static str> {
+    match error {
+        Error::AuthenticationFailed => {
+            Some("Admission refused | peer is unknown, removed, or used a retired code")
+        }
+        Error::State("handshake deadline exceeded") => {
+            Some("Peer connection closed | handshake deadline")
+        }
+        Error::State("peer idle timeout") => Some("Peer connection closed | peer idle timeout"),
+        Error::State("peer membership was revoked") => {
+            Some("Admission refused | peer membership was revoked")
+        }
+        Error::InvalidInput("unsupported TCP frame version")
+        | Error::State("unsupported live frame")
+        | Error::State("unsupported live control") => {
+            Some("Peer connection closed | unsupported request from a port probe")
+        }
+        Error::Io(io) => matches!(
+            io.kind(),
+            std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+        )
+        .then_some("Peer connection closed | early eof or reset"),
+        _ => None,
     }
 }
 

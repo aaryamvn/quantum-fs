@@ -101,6 +101,10 @@ impl AdminStatus {
 
     /// Online members of every vault on this host, H itself excluded — the term the
     /// server-capacity formula adds to the host's own advertised capacity.
+    /// Nothing reads this since a server's spare capacity became the sum of its members'
+    /// own contributions (`RootState::server_contributions`); kept because it is the one
+    /// honest reading of the `MEMBER` lines a `STATUS` block carries.
+    #[allow(dead_code)]
     pub fn online_members_excluding_host(&self) -> u64 {
         self.members
             .iter()

@@ -35,6 +35,8 @@ import type {
   OrchestrationServer,
   PeerId,
   PeerPresence,
+  Profile,
+  ProfilePatch,
   Recent,
   SearchHit,
   SearchQuery,
@@ -62,6 +64,8 @@ const EVENT_RECENTS_CHANGED = "backend://recents-changed";
 const EVENT_PRESENCE = "backend://presence";
 /** Emitted when a membership ends (deleted, kicked, unrecoverable); payload is {@link VaultRemovedPayload}. */
 const EVENT_VAULT_REMOVED = "backend://vault-removed";
+/** Emitted when the local profile changes (name, contribution); payload is a {@link Profile}. */
+const EVENT_PROFILE_CHANGED = "backend://profile-changed";
 
 interface VaultScopedPayload {
   vaultId: VaultId;
@@ -284,6 +288,9 @@ export function createTauriBackend(): BackendClient {
         listen<PresencePayload>(EVENT_PRESENCE, (e) => {
           listener({ type: "presence", vaultId: e.payload.vaultId, peers: e.payload.peers });
         }),
+        listen<Profile>(EVENT_PROFILE_CHANGED, (e) => {
+          listener({ type: "profile-changed", profile: e.payload });
+        }),
         listen<VaultRemovedPayload>(EVENT_VAULT_REMOVED, (e) => {
           // The vault is gone; a cached tree for it can only mislead the next search.
           treeCache.delete(e.payload.vaultId);
@@ -304,6 +311,14 @@ export function createTauriBackend(): BackendClient {
 
     me() {
       return invokeCommand<Member>("me");
+    },
+
+    getProfile() {
+      return invokeCommand<Profile>("get_profile");
+    },
+
+    setProfile(patch: ProfilePatch) {
+      return invokeCommand<Profile>("set_profile", { patch });
     },
 
     listTree(vaultId: VaultId) {

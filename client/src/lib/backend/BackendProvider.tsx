@@ -74,6 +74,11 @@ export function BackendProvider({ children }: { children: ReactNode }) {
         case "daemon-status":
           setStatus(e.status);
           break;
+        case "profile-changed":
+          // The name is one thing, but a contribution change moves every vault's
+          // capacity, and the rows on the home screen read it.
+          void refresh();
+          break;
         case "vault-removed":
           // The vault list is what changed, and `refresh` is the only thing that reads
           // it.

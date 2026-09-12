@@ -52,6 +52,8 @@ pub fn run() {
             bridge::create_vault,
             bridge::join_vault,
             fs_commands::me,
+            fs_commands::get_profile,
+            fs_commands::set_profile,
             fs_commands::list_tree,
             fs_commands::create_node,
             fs_commands::rename_node,

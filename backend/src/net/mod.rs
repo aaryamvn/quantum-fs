@@ -8,11 +8,25 @@ pub mod directory;
 pub mod frame;
 pub mod join;
 pub mod locate;
+pub mod profiles;
 pub mod session;
 pub mod short_code;
 pub mod vaults;
 
 const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/// An `accept()` error is a local resource hiccup, never a reason to stop
+/// listening. Every accept loop logs one non-red line, pauses briefly so a
+/// persistent condition cannot spin the runtime, and keeps serving.
+pub(crate) async fn listener_hiccup(error: &std::io::Error) {
+    crate::demo_log::event(
+        crate::demo_log::Kind::Sync,
+        "TCP",
+        format!("Listener hiccup | reason {error}"),
+        &[],
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct JoinCode(pub [u8; 16]);

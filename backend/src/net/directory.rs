@@ -223,7 +223,13 @@ impl DirectoryClient {
 pub async fn serve(listener: TcpListener, store: Rc<RefCell<DirectoryStore>>) -> Result<()> {
     let active = Rc::new(Cell::new(0usize));
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                super::listener_hiccup(&error).await;
+                continue;
+            }
+        };
         if active.get() >= MAX_CONNECTIONS {
             drop(stream);
             continue;

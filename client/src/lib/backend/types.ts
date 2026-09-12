@@ -28,6 +28,12 @@ export interface Vault {
   usedBytes: number;
   /** Bytes of the server's capacity allocated to this vault. */
   quotaBytes: number;
+  /**
+   * What the vault can actually hold: `quotaBytes` plus every member's storage
+   * contribution. The host's slice is the floor; each member who joins raises it
+   * by what they pledge from their own disk.
+   */
+  capacityBytes: number;
   role: "owner" | "member";
 }
 
@@ -115,6 +121,8 @@ export interface FsNode {
 /** A person on a vault's member list, as the workspace needs to draw them. */
 export interface Member {
   peerId: PeerId;
+  /** The member's client install (one person may run several). Stable per machine. */
+  clientId: string;
   name: string;
   initials: string;
   /** Presence/cursor color as #RRGGBB. */
@@ -125,7 +133,34 @@ export interface Member {
   lastEdited: { nodeId: NodeId; at: number } | null;
   /** Ops waiting to sync while offline. */
   queuedOps: number;
+  /** Bytes of their own disk this member pledges to the vaults they belong to. */
+  contributionBytes: number;
   isSelf: boolean;
+}
+
+/**
+ * The local person, as they are stored on this machine.
+ *
+ * Lives in the daemon (the browser mock keeps it in memory), never in
+ * `localStorage`: it is identity, and identity is the backend's to own.
+ * `nameSet` is what the first launch turns on — false means the app has never
+ * been told who this is, and the onboarding screen asks.
+ */
+export interface Profile {
+  clientId: string;
+  name: string;
+  /** Presence/cursor color as #RRGGBB, same palette as {@link Member.color}. */
+  color: string;
+  /** false until the person has answered the onboarding question once. */
+  nameSet: boolean;
+  /** Bytes of local disk pledged to every vault this client joins. */
+  contributionBytes: number;
+}
+
+/** Partial update of the local profile; omitted fields keep their current value. */
+export interface ProfilePatch {
+  name?: string;
+  contributionBytes?: number;
 }
 
 /** One member's permission inside a node's access list. */
@@ -288,6 +323,8 @@ export type BackendEvent =
   | { type: "members-changed"; vaultId: VaultId }
   | { type: "vault-changed"; vaultId: VaultId }
   | { type: "recents-changed" }
+  /** The local profile changed (name or contribution); payload is the whole profile. */
+  | { type: "profile-changed"; profile: Profile }
   /**
    * A vault this client belonged to is gone: the owner deleted it, the host kicked
    * this member, or the membership failed to re-establish. `reason` is a human

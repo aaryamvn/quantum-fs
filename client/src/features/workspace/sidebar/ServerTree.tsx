@@ -166,7 +166,9 @@ function ServerGroup({ server }: { server: OrchestrationServer }) {
               .join(" ")}
           />
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-[600] text-fg">{server.name}</span>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-[600] text-fg">
+          {server.address}
+        </span>
         {/* Presence is white, not green: a colored dot in a monochrome rail reads
             as a warning, and reachability is a state, not an alert. */}
         <span

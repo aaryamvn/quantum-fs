@@ -42,20 +42,23 @@ export function Card({
 }
 
 /**
- * A server is a heading, not a row: it names the group of vaults beneath it and
- * carries their address, so the card below can be pure content.
+ * A server is a heading, not a row: it names the group of vaults beneath it, so
+ * the card below can be pure content.
+ *
+ * The address IS the name. A server has no human name worth inventing — an
+ * auto-generated "Server 2" tells you nothing and, on a demo where three
+ * machines are on screen at once, actively lies about which host you are
+ * looking at. The `ip:port` it answers on is the only label that identifies it.
  *
  * A server the daemon cannot reach keeps its vaults on screen — they exist, and
  * hiding them would read as data loss — but goes quiet: the identity dims, an
  * Offline chip says why, and the one action it offers stops pretending it works.
  */
 export function ServerHeading({
-  name,
   address,
   online = true,
   onAdd,
 }: {
-  name: string;
   address: string;
   online?: boolean;
   onAdd(): void;
@@ -73,7 +76,9 @@ export function ServerHeading({
       // and an unexplained dead control is the thing this is here to avoid.
       aria-disabled={online ? undefined : true}
       onClick={online ? onAdd : undefined}
-      aria-label={online ? `Add vault to ${name}` : `Add vault to ${name} — server unreachable`}
+      aria-label={
+        online ? `Add vault to ${address}` : `Add vault to ${address} — server unreachable`
+      }
       className={`-mr-[3px] grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full
         transition-colors duration-[160ms] ${EASE}
         ${
@@ -96,11 +101,6 @@ export function ServerHeading({
       />
       <span
         className={`ml-[8px] truncate text-[15px] leading-none font-medium tracking-[-0.005em] text-fg ${dim}`}
-      >
-        {name}
-      </span>
-      <span
-        className={`ml-[10px] truncate text-[13px] leading-none font-normal text-fg-3 tabular-nums ${dim}`}
       >
         {address}
       </span>

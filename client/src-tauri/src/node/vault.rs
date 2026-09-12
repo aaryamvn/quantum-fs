@@ -121,6 +121,14 @@ pub enum VaultReq {
     AskAgent(String, Reply<AgentReply>),
     /// The admin credentials for this vault's host, or `None` when we have no token.
     Admin(Option<AdminTarget>),
+    /// The human changed their name, colour or contribution. The task updates its copy and
+    /// republishes its own `.qfs-meta.json` entry on the next tick.
+    ProfileChanged {
+        name: String,
+        color: String,
+        client_id: String,
+        contribution_bytes: u64,
+    },
     /// The newest `STATUS` numbers for this vault.
     Status(Box<VaultSnapshot>),
     /// Stop the task: `leave`, `delete`, or a revoked membership.
@@ -151,6 +159,14 @@ pub struct VaultSnapshot {
 struct SidecarMember {
     name: String,
     color: String,
+    /// The stable id of the *client* behind this member (`node::state::client_id`). One
+    /// person on one Mac keeps it across every vault, which is what lets the home screen add
+    /// contributions up without counting the same disk twice.
+    #[serde(rename = "clientId")]
+    client_id: String,
+    /// How much local disk that client lends this vault.
+    #[serde(rename = "contributionBytes")]
+    contribution_bytes: u64,
 }
 
 /// `/.qfs-meta.json`: everything the workspace shows that the protocol has no field for
@@ -252,6 +268,14 @@ pub struct VaultNode {
     root_id: String,
     record: VaultRecord,
     profile: state::Profile,
+    /// This client's id, as the root loop computed it at start. Never persisted here: it is
+    /// derived from the machine and the data directory on every run.
+    client_id: String,
+    /// The last vault name this task told the root loop about, so an unchanged sidecar does
+    /// not re-save `vault.json` on every tick.
+    last_name_told: String,
+    /// The last `(name, contributions)` pair reported upwards, for the same reason.
+    last_local: (String, Vec<(String, u64)>),
     emit: Emit,
     root_tx: UnboundedSender<Req>,
     keys: KeyStore,
@@ -336,6 +360,7 @@ pub fn spawn(
     data_dir: PathBuf,
     record: VaultRecord,
     profile: state::Profile,
+    client_id: String,
     emit: Emit,
     root_tx: UnboundedSender<Req>,
     admin: Option<AdminTarget>,
@@ -364,6 +389,9 @@ pub fn spawn(
         root_id: root_node_id(&record.vault_id),
         record,
         profile,
+        client_id,
+        last_name_told: String::new(),
+        last_local: (String::new(), Vec::new()),
         emit,
         root_tx,
         keys,
@@ -546,6 +574,21 @@ impl VaultNode {
                 let _ = reply.send(result);
             }
             VaultReq::Admin(target) => self.admin = target,
+            VaultReq::ProfileChanged {
+                name,
+                color,
+                client_id,
+                contribution_bytes,
+            } => {
+                self.profile.name = name;
+                self.profile.color = color;
+                self.profile.contribution_bytes = contribution_bytes;
+                self.client_id = client_id;
+                // The same flag a join sets: the tick loop retries the sidecar write until
+                // the host takes it, so a rename made while offline still lands later.
+                self.sidecar_pending = true;
+                self.emit_members();
+            }
             VaultReq::Status(snapshot) => self.apply_snapshot(*snapshot),
             VaultReq::Stop(reply) => {
                 // Answered in `run`, after the last save and after every handle is dropped.
@@ -574,6 +617,7 @@ impl VaultNode {
         if self.sidecar_pending {
             self.sync_sidecar().await;
         }
+        self.report_local();
         self.advance_download().await;
         self.watch_open_files().await;
         self.project();
@@ -904,6 +948,8 @@ impl VaultNode {
         let mine = SidecarMember {
             name: self.profile.name.clone(),
             color: self.profile.color.clone(),
+            client_id: self.client_id.clone(),
+            contribution_bytes: self.profile.contribution_bytes,
         };
         if next.members.get(&own) != Some(&mine) {
             next.members.insert(own, mine);
@@ -1083,6 +1129,9 @@ impl VaultNode {
         if let Ok(parsed) = serde_json::from_slice::<Sidecar>(&bytes) {
             self.sidecar = parsed;
             self.sidecar_version = trusted.manifest().version;
+            // A joiner's `vault.json` carries no name: the vault is named in the replicated
+            // sidecar, so the first copy that arrives is what puts a title on the card.
+            self.tell_name();
             self.emit(
                 "backend://vault-changed",
                 &VaultIdPayload {
@@ -1122,6 +1171,74 @@ impl VaultNode {
             }
         }
         Ok(())
+    }
+
+    /// Push the replicated vault name up to the root loop, which caches it in `vault.json`
+    /// and redraws the home screen. Only ever on a change: this runs off the heartbeat.
+    fn tell_name(&mut self) {
+        if self.sidecar.name.is_empty() || self.sidecar.name == self.last_name_told {
+            return;
+        }
+        self.last_name_told = self.sidecar.name.clone();
+        let _ = self.root_tx.send(Req::VaultNameChanged {
+            vault_id: self.vault_hex.clone(),
+            name: self.sidecar.name.clone(),
+        });
+    }
+
+    /// Every distinct client lending this vault disk: its client id and what it lends.
+    ///
+    /// The host is skipped — its disk is the quota, and counting it again would show it
+    /// twice. A member whose sidecar entry carries no client id is skipped too: without one
+    /// the same person on two vaults of the same server cannot be deduplicated, and
+    /// over-counting free space is the failure that ends in "Not enough space on this server".
+    fn contributions(&self) -> Vec<(String, u64)> {
+        let host = self.replica.as_ref().map(|r| r.borrow().host_id());
+        let mut peers: BTreeSet<PeerId> = self
+            .replica
+            .as_ref()
+            .map(|r| r.borrow().members().clone())
+            .unwrap_or_default();
+        peers.insert(self.self_peer);
+        let mut out: BTreeMap<String, u64> = BTreeMap::new();
+        for peer in &peers {
+            if host == Some(*peer) {
+                continue;
+            }
+            let (client, bytes) = if *peer == self.self_peer {
+                (self.client_id.clone(), self.profile.contribution_bytes)
+            } else {
+                let peer_hex = hex(&peer.0);
+                match self.sidecar.members.get(&peer_hex) {
+                    Some(entry) if !entry.client_id.is_empty() => {
+                        (entry.client_id.clone(), entry.contribution_bytes)
+                    }
+                    _ => continue,
+                }
+            };
+            if client.is_empty() || bytes == 0 {
+                continue;
+            }
+            out.insert(client, bytes);
+        }
+        out.into_iter().collect()
+    }
+
+    /// What the home screen needs from this task and `STATUS` cannot supply: the replicated
+    /// name, and the per-client contributions the vault's and the server's capacity add up.
+    /// Sent only when something moved — this runs on the 100 ms heartbeat.
+    fn report_local(&mut self) {
+        let name = self.sidecar.name.clone();
+        let contributions = self.contributions();
+        if self.last_local.0 == name && self.last_local.1 == contributions {
+            return;
+        }
+        self.last_local = (name.clone(), contributions.clone());
+        let _ = self.root_tx.send(Req::VaultLocal {
+            vault_id: self.vault_hex.clone(),
+            name,
+            contributions,
+        });
     }
 
     /* --------------------------------------------------------- projection */
@@ -2660,6 +2777,16 @@ impl VaultNode {
                 };
                 Member {
                     peer_id: presented.clone(),
+                    client_id: if is_self {
+                        self.client_id.clone()
+                    } else {
+                        cosmetics.map(|e| e.client_id.clone()).unwrap_or_default()
+                    },
+                    contribution_bytes: if is_self {
+                        self.profile.contribution_bytes
+                    } else {
+                        cosmetics.map(|e| e.contribution_bytes).unwrap_or(0)
+                    },
                     name: name.clone(),
                     initials: initials(&name),
                     color,

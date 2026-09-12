@@ -66,6 +66,15 @@
   --color-surface-active: #121838;
   --color-surface-2: #0a0f22;
 
+  /*
+   * The floor of an input. A field has to read as a slab cut into the panel it
+   * sits on, and --color-bg is *darker* than the modal's surface-2, so a field
+   * painted with it turned into a hole. This is the same hue, one step lighter
+   * than surface-hover and one step under surface-active.
+   */
+  --color-field: #10162e;
+  --color-field-hover: #141b36;
+
   --color-line: rgba(255, 255, 255, 0.07);
   --color-line-strong: rgba(255, 255, 255, 0.13);
 
@@ -110,6 +119,17 @@
   --color-avatar-ring: rgba(170, 150, 255, 0.55);
   --color-avatar-a: #8a63ff;
   --color-avatar-b: #4e0eff;
+
+  /*
+   * Offline is a different face, not a faded one. Transparency let the surface
+   * behind an avatar bleed through it — two overlapping discs in a stack turned
+   * into one muddy shape — so a dimmed face swaps to its own solid, desaturated
+   * fill and stays fully opaque.
+   */
+  --color-avatar-muted-a: #2b2a3d;
+  --color-avatar-muted-b: #1c1b2c;
+  --color-avatar-muted-fg: rgba(245, 245, 247, 0.55);
+  --color-avatar-muted-ring: rgba(170, 150, 255, 0.18);
 
   /* One stable color per demo peer, so a peer's marks always agree. */
   --color-peer-aaryaman: #ff7b7b;
@@ -321,6 +341,15 @@
  */
 .avatar-face {
   background-image: linear-gradient(135deg, var(--color-avatar-a), var(--color-avatar-b));
+}
+
+/* The same disc, offline: solid and dark rather than transparent. */
+.avatar-face-muted {
+  background-image: linear-gradient(
+    135deg,
+    var(--color-avatar-muted-a),
+    var(--color-avatar-muted-b)
+  );
 }
 
 /* Floating surfaces sit ON the app, so they blur it rather than hide it. */

@@ -67,6 +67,7 @@
     "vlt_1_1": [
       {
         "peerId": "peer_aaryaman",
+        "clientId": "client_mock_self",
         "name": "Aaryaman Maheshwari",
         "initials": "AM",
         "color": "#FF7B7B",
@@ -78,10 +79,12 @@
           "at": 1787254583558
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": true
       },
       {
         "peerId": "peer_justin",
+        "clientId": "client_mock_1",
         "name": "Justin Park",
         "initials": "JP",
         "color": "#4E0EFF",
@@ -93,10 +96,12 @@
           "at": 1788356530093
         },
         "queuedOps": 0,
+        "contributionBytes": 4294967296,
         "isSelf": false
       },
       {
         "peerId": "peer_maya",
+        "clientId": "client_mock_2",
         "name": "Maya Okafor",
         "initials": "MO",
         "color": "#7BFFD6",
@@ -108,10 +113,12 @@
           "at": 1778992038432
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": false
       },
       {
         "peerId": "peer_kenji",
+        "clientId": "client_mock_3",
         "name": "Kenji Watanabe",
         "initials": "KW",
         "color": "#FFC27B",
@@ -123,10 +130,12 @@
           "at": 1787441309262
         },
         "queuedOps": 0,
+        "contributionBytes": 17179869184,
         "isSelf": false
       },
       {
         "peerId": "peer_priya",
+        "clientId": "client_mock_4",
         "name": "Priya Nair",
         "initials": "PN",
         "color": "#C084FC",
@@ -135,12 +144,14 @@
         "lastSeenAt": 1789203600000,
         "lastEdited": null,
         "queuedOps": 7,
+        "contributionBytes": 34359738368,
         "isSelf": false
       }
     ],
     "vlt_1_2": [
       {
         "peerId": "peer_justin",
+        "clientId": "client_mock_1",
         "name": "Justin Park",
         "initials": "JP",
         "color": "#4E0EFF",
@@ -152,10 +163,12 @@
           "at": 1785701811997
         },
         "queuedOps": 0,
+        "contributionBytes": 4294967296,
         "isSelf": false
       },
       {
         "peerId": "peer_aaryaman",
+        "clientId": "client_mock_self",
         "name": "Aaryaman Maheshwari",
         "initials": "AM",
         "color": "#FF7B7B",
@@ -167,10 +180,12 @@
           "at": 1787875021537
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": true
       },
       {
         "peerId": "peer_kenji",
+        "clientId": "client_mock_3",
         "name": "Kenji Watanabe",
         "initials": "KW",
         "color": "#FFC27B",
@@ -182,10 +197,12 @@
           "at": 1788613235738
         },
         "queuedOps": 0,
+        "contributionBytes": 17179869184,
         "isSelf": false
       },
       {
         "peerId": "peer_lena",
+        "clientId": "client_mock_5",
         "name": "Lena Fischer",
         "initials": "LF",
         "color": "#60A5FA",
@@ -197,10 +214,12 @@
           "at": 1787834086538
         },
         "queuedOps": 0,
+        "contributionBytes": 4294967296,
         "isSelf": false
       },
       {
         "peerId": "peer_omar",
+        "clientId": "client_mock_6",
         "name": "Omar Haddad",
         "initials": "OH",
         "color": "#F472B6",
@@ -212,12 +231,14 @@
           "at": 1787875021537
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": false
       }
     ],
     "vlt_1_3": [
       {
         "peerId": "peer_maya",
+        "clientId": "client_mock_2",
         "name": "Maya Okafor",
         "initials": "MO",
         "color": "#7BFFD6",
@@ -229,10 +250,12 @@
           "at": 1782067772806
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": false
       },
       {
         "peerId": "peer_aaryaman",
+        "clientId": "client_mock_self",
         "name": "Aaryaman Maheshwari",
         "initials": "AM",
         "color": "#FF7B7B",
@@ -244,12 +267,14 @@
           "at": 1782524965370
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": true
       }
     ],
     "vlt_2_1": [
       {
         "peerId": "peer_lena",
+        "clientId": "client_mock_5",
         "name": "Lena Fischer",
         "initials": "LF",
         "color": "#60A5FA",
@@ -261,10 +286,12 @@
           "at": 1787709566580
         },
         "queuedOps": 0,
+        "contributionBytes": 4294967296,
         "isSelf": false
       },
       {
         "peerId": "peer_aaryaman",
+        "clientId": "client_mock_self",
         "name": "Aaryaman Maheshwari",
         "initials": "AM",
         "color": "#FF7B7B",
@@ -276,10 +303,12 @@
           "at": 1787709566580
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": true
       },
       {
         "peerId": "peer_sofia",
+        "clientId": "client_mock_7",
         "name": "Sofia Rossi",
         "initials": "SR",
         "color": "#34D399",
@@ -291,10 +320,12 @@
           "at": 1782672958752
         },
         "queuedOps": 0,
+        "contributionBytes": 17179869184,
         "isSelf": false
       },
       {
         "peerId": "peer_omar",
+        "clientId": "client_mock_6",
         "name": "Omar Haddad",
         "initials": "OH",
         "color": "#F472B6",
@@ -306,12 +337,14 @@
           "at": 1784145464804
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": false
       }
     ],
     "vlt_2_2": [
       {
         "peerId": "peer_aaryaman",
+        "clientId": "client_mock_self",
         "name": "Aaryaman Maheshwari",
         "initials": "AM",
         "color": "#FF7B7B",
@@ -323,10 +356,12 @@
           "at": 1774699147641
         },
         "queuedOps": 0,
+        "contributionBytes": 8589934592,
         "isSelf": true
       },
       {
         "peerId": "peer_kenji",
+        "clientId": "client_mock_3",
         "name": "Kenji Watanabe",
         "initials": "KW",
         "color": "#FFC27B",
@@ -338,6 +373,7 @@
           "at": 1784488992801
         },
         "queuedOps": 0,
+        "contributionBytes": 17179869184,
         "isSelf": false
       }
     ]
@@ -6414,8 +6450,8 @@
     }
   ],
   "previews": {
-    "n_1_1_069": "# Design Assets\n\nEverything the studio ships from. Source lives here, exports go to Projects/.\n\n- Brand/ — marks, type, color. Ask before editing guidelines.pdf.\n- Film/ — masters are remote by default; download before scrubbing.\n- Archive/ — frozen. Read-only for everyone but the admins.\n\nNaming: kebab-case, no dates in filenames, versions live in history.\n",
-    "n_1_1_080": "Notes — week 37\n\n- Poster is finally locked. Kenji has the 412 MB HDR pinned locally.\n- Hero cut runs 8s long; Justin trimming the title card.\n- Priya is offline again (7 ops queued) — she has the type specimen.\n- Move the 2019 site zip out of Archive before the key rotation.\n",
+    "n_1_1_069": "# Design Assets\n\nEverything the studio ships from. Source lives here, exports go to Projects/.\n\n- Brand/ \u2014 marks, type, color. Ask before editing guidelines.pdf.\n- Film/ \u2014 masters are remote by default; download before scrubbing.\n- Archive/ \u2014 frozen. Read-only for everyone but the admins.\n\nNaming: kebab-case, no dates in filenames, versions live in history.\n",
+    "n_1_1_080": "Notes \u2014 week 37\n\n- Poster is finally locked. Kenji has the 412 MB HDR pinned locally.\n- Hero cut runs 8s long; Justin trimming the title card.\n- Priya is offline again (7 ops queued) \u2014 she has the type specimen.\n- Move the 2019 site zip out of Archive before the key rotation.\n",
     "n_1_1_073": "{\n  \"base\": 15,\n  \"ratio\": 1.2,\n  \"steps\": {\n    \"caption\": 12,\n    \"body\": 15,\n    \"lead\": 18,\n    \"title\": 22,\n    \"display\": 32\n  },\n  \"family\": \"GT Walsheim\",\n  \"weights\": [400, 500]\n}\n",
     "n_1_1_074": "Brand voice\n\nPlain. Precise. Never breathless.\n\nSay \"your files stay on your machine\", not \"revolutionary local-first paradigm\".\nNumbers beat adjectives. One idea per sentence.\nNever use exclamation marks in product copy.\n",
     "n_1_1_079": "#!/usr/bin/env python3\n\"\"\"Export every board in the working file to 2x PNG.\"\"\"\n\nfrom pathlib import Path\n\nOUT = Path(\"exports\")\nSCALE = 2\n\n\ndef export(boards):\n    OUT.mkdir(exist_ok=True)\n    for name, board in boards.items():\n        target = OUT / f\"{name}@{SCALE}x.png\"\n        board.render(scale=SCALE).save(target)\n        print(f\"wrote {target}\")\n\n\nif __name__ == \"__main__\":\n    export(load_boards())\n",

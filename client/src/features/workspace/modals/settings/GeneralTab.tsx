@@ -139,7 +139,7 @@ export function GeneralTab() {
             aria-label="Vault description"
             placeholder="What lives in this vault"
             onChange={(e) => setDescription(e.target.value)}
-            className="w-full resize-none rounded-[10px] border border-line-strong bg-bg px-[14px] py-[11px]
+            className="w-full resize-none rounded-[10px] border border-line-strong bg-field px-[14px] py-[11px]
               text-[15px] leading-[21px] text-fg outline-none transition-[border-color] duration-[160ms]
               ease-[cubic-bezier(0.2,0.8,0.2,1)] placeholder:text-fg-3 focus:border-white/40"
           />
@@ -153,7 +153,7 @@ export function GeneralTab() {
             aria-label="Host server"
             options={servers.map((server) => ({
               value: server.id,
-              label: `${server.name} · ${server.address}`,
+              label: server.address,
             }))}
           />
         </Field>

@@ -30,6 +30,7 @@
 
 mod admin;
 mod names;
+mod profile_store;
 mod state;
 mod vault;
 
@@ -39,7 +40,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -54,8 +55,9 @@ use quantam_fs::net::JoinCode;
 use crate::fs_types::{
     AgentReply, AskAgentInput, CreateNodeInput, CreateVaultInput, DaemonStatus, DeleteNodesInput,
     DuplicateNodesInput, FsNode, HistoryEvent, Member, MemberRole, MoveNodesInput, NodeAccess,
-    PeerPresence, PresenceInput, Recent, RenameNodeInput, Role, Server, SetAccessInput,
-    SetNodeColorInput, Vault, VaultIdPayload, VaultMeta, VaultMetaPatch, VaultRemovedPayload,
+    PeerPresence, PresenceInput, Profile as ProfileView, ProfilePatch, Recent, RenameNodeInput,
+    Role, Server, SetAccessInput, SetNodeColorInput, Vault, VaultIdPayload, VaultMeta,
+    VaultMetaPatch, VaultRemovedPayload,
 };
 
 use admin::{AdminConn, AdminStatus, AdminTarget};
@@ -85,8 +87,13 @@ const STAGING_TTL: Duration = Duration::from_secs(3600);
 const MIN_QUOTA_BYTES: u64 = 268_435_456;
 /// Capacity shown for a server we cannot run admin commands against: 128 GiB.
 const DEFAULT_CAPACITY_BYTES: u64 = 137_438_953_472;
-/// Each online member lends the vault its own disk, discounted for churn: 0.85 * 8 GiB.
-const MEMBER_CREDIT_BYTES: f64 = 0.85 * 8.0 * 1024.0 * 1024.0 * 1024.0;
+/// The directory's profile store sits this far above the directory itself (7440 -> 8440).
+const PROFILE_STORE_PORT_OFFSET: u16 = 1000;
+/// While this client's name is not in the directory's profile store, it is offered again at
+/// most this often. A store that is not running must not become a connect-per-second.
+const PROFILE_PUT_INTERVAL: Duration = Duration::from_secs(30);
+/// The longest display name `set_profile` accepts, in characters.
+const MAX_PROFILE_NAME_CHARS: usize = 40;
 /// How long `create_vault`/`join_vault` wait for the vault task to actually be admitted before
 /// the half-made vault is rolled back.
 const ADMISSION_TIMEOUT: Duration = Duration::from_secs(12);
@@ -108,6 +115,8 @@ pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 pub enum Req {
     Status(Reply<DaemonStatus>),
     Me(Reply<Member>),
+    GetProfile(Reply<ProfileView>),
+    SetProfile(ProfilePatch, Reply<ProfileView>),
     ListServers(Reply<Vec<Server>>),
     AddServer(String, String, Reply<Server>),
     CreateVault(CreateVaultInput, Reply<Vault>),
@@ -138,6 +147,13 @@ pub enum Req {
     Shutdown(std::sync::mpsc::Sender<()>),
     /// A vault's sidecar name changed, so the cached copy in `vault.json` is stale.
     VaultNameChanged { vault_id: String, name: String },
+    /// What one vault task knows about itself that `STATUS` cannot say: the replicated vault
+    /// name, and which clients lend it disk (`client_id`, `contribution_bytes`).
+    VaultLocal {
+        vault_id: String,
+        name: String,
+        contributions: Vec<(String, u64)>,
+    },
     /// `open_node` finished; keep the sidebar's recents current without a round trip.
     TouchRecent { vault_id: String, node_id: String },
 }
@@ -235,6 +251,14 @@ impl Node {
 
     pub async fn me(&self) -> Result<Member, String> {
         self.call(Req::Me).await
+    }
+
+    pub async fn get_profile(&self) -> Result<ProfileView, String> {
+        self.call(Req::GetProfile).await
+    }
+
+    pub async fn set_profile(&self, patch: ProfilePatch) -> Result<ProfileView, String> {
+        self.call(|reply| Req::SetProfile(patch, reply)).await
     }
 
     /* --------------------------------------------------------------- tree */
@@ -445,11 +469,18 @@ impl Node {
 
 /* -------------------------------------------------------------- the core */
 
-/// The numbers a vault knows about itself, for the servers we hold no admin token for.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// What a vault task reports about itself. The first two stand in for `STATUS` on a server we
+/// hold no admin token for; the last two are things `STATUS` cannot know at all — the name
+/// lives in the replicated sidecar, and the contributions are the members' own disks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct LocalNumbers {
     member_count: u32,
     used_bytes: u64,
+    /// The vault name as the replicated `.qfs-meta.json` states it; empty until it arrives.
+    name: String,
+    /// `(client_id, contribution_bytes)` for every distinct client in this vault, host
+    /// excluded. Sorted by client id, so an unchanged set compares equal.
+    contributions: Vec<(String, u64)>,
 }
 
 /// One live vault: its persisted record, the channel to its task, and the numbers the task
@@ -470,6 +501,13 @@ struct RootState {
     emit: Emit,
     tx: UnboundedSender<Req>,
     profile: Profile,
+    /// This machine-and-data-directory's stable id, recomputed at every start and never
+    /// written down (`state::client_id`).
+    client_id: String,
+    /// The directory's profile store holds `client_id -> name` for the current name.
+    profile_synced: bool,
+    /// When the last `PROFILE_PUT` was attempted, so a store that is down is retried slowly.
+    profile_put_at: Option<Instant>,
     servers: Vec<ServerRecord>,
     recents: Vec<RecentRecord>,
     vaults: Vec<Live>,
@@ -494,8 +532,13 @@ async fn run(
     let _ = std::fs::create_dir_all(&data_dir);
     sweep_staging(&data_dir);
 
+    let profile = state::load_profile(&data_dir);
+    let client_id = state::client_id(&data_dir, &profile.peer_id);
     let state: Root = Rc::new(RefCell::new(RootState {
-        profile: state::load_profile(&data_dir),
+        profile,
+        client_id,
+        profile_synced: false,
+        profile_put_at: None,
         servers: state::load_servers(&data_dir),
         recents: state::load_recents(&data_dir),
         vaults: Vec::new(),
@@ -513,6 +556,12 @@ async fn run(
     }
     tokio::task::spawn_local(poll_admin(tx));
     tokio::task::spawn_local(poll_local_numbers(state.clone()));
+    tokio::task::spawn_local(poll_profile_sync(state.clone()));
+    // A client that has never been named asks the directory whether it knew this machine
+    // before the data dir was wiped. A hit skips onboarding entirely.
+    if !state.borrow().profile.name_set {
+        tokio::task::spawn_local(adopt_stored_name(state.clone()));
+    }
     {
         let mut root = state.borrow_mut();
         root.emit_status();
@@ -624,17 +673,18 @@ async fn poll_local_numbers(state: Root) {
             .collect();
         for vault_id in pending {
             let cache = state::load_cache(&root.data_dir, &vault_id);
-            let next = LocalNumbers {
-                member_count: cache.member_count,
-                used_bytes: cache.used_bytes,
-            };
             if let Some(live) = root
                 .vaults
                 .iter_mut()
                 .find(|live| live.record.vault_id == vault_id)
             {
-                if live.local != next {
-                    live.local = next;
+                // Only the two cached numbers: the name and the contributions come from the
+                // vault task itself (`Req::VaultLocal`) and would be wiped by a blanket assign.
+                if live.local.member_count != cache.member_count
+                    || live.local.used_bytes != cache.used_bytes
+                {
+                    live.local.member_count = cache.member_count;
+                    live.local.used_bytes = cache.used_bytes;
                     moved = true;
                 }
             }
@@ -658,6 +708,17 @@ fn dispatch(state: &Root, req: Req) {
         Req::Me(reply) => {
             let me = state.borrow().me();
             let _ = reply.send(Ok(me));
+        }
+        Req::GetProfile(reply) => {
+            let profile = state.borrow().profile_view();
+            let _ = reply.send(Ok(profile));
+        }
+        Req::SetProfile(patch, reply) => {
+            let result = set_profile(state, patch);
+            if result.is_ok() {
+                try_put_profile(state);
+            }
+            let _ = reply.send(result);
         }
         Req::ListServers(reply) => {
             let servers = state.borrow().servers();
@@ -690,14 +751,45 @@ fn dispatch(state: &Root, req: Req) {
         }
         Req::AdminResult(server_id, result) => apply_admin(state, &server_id, result),
         Req::VaultJoined { vault_id } => {
-            if let Some(live) = state
-                .borrow_mut()
+            let mut root = state.borrow_mut();
+            let mut save = None;
+            if let Some(live) = root
                 .vaults
                 .iter_mut()
                 .find(|live| live.record.vault_id == vault_id)
             {
                 live.joined = true;
+                // Persisted: a later run has to tell "never got in" from "was in and is not
+                // any more", and only a host that admitted us can say the first.
+                if !live.record.joined_once {
+                    live.record.joined_once = true;
+                    save = Some(live.record.clone());
+                }
             }
+            if let Some(record) = save {
+                state::save_vault(&root.data_dir, &record);
+            }
+            drop(root);
+        }
+        Req::VaultLocal {
+            vault_id,
+            name,
+            contributions,
+        } => {
+            let mut root = state.borrow_mut();
+            if let Some(live) = root
+                .vaults
+                .iter_mut()
+                .find(|live| live.record.vault_id == vault_id)
+            {
+                if live.local.name != name || live.local.contributions != contributions {
+                    live.local.name = name;
+                    live.local.contributions = contributions;
+                }
+            }
+            // Both halves feed a vault card (its title) and a server card (its capacity), so
+            // the change detection inside `emit_servers` decides whether the UI hears about it.
+            root.emit_servers();
         }
         Req::VaultNameChanged { vault_id, name } => {
             let mut root = state.borrow_mut();
@@ -806,6 +898,8 @@ impl RootState {
     fn me(&self) -> Member {
         Member {
             peer_id: self.profile.peer_id.clone(),
+            client_id: self.client_id.clone(),
+            contribution_bytes: self.profile.contribution_bytes,
             name: self.profile.name.clone(),
             initials: initials(&self.profile.name),
             color: self.profile.color.clone(),
@@ -818,26 +912,85 @@ impl RootState {
         }
     }
 
+    /// The profile as the webview reads it: one client, one name, one contribution.
+    fn profile_view(&self) -> ProfileView {
+        ProfileView {
+            client_id: self.client_id.clone(),
+            name: self.profile.name.clone(),
+            color: self.profile.color.clone(),
+            name_set: self.profile.name_set,
+            contribution_bytes: self.profile.contribution_bytes,
+        }
+    }
+
+    /// Tell the webview and every live vault task that the profile moved. The tasks republish
+    /// their own `.qfs-meta.json` entry, so the other members see the new name and number.
+    fn publish_profile(&mut self) {
+        let view = self.profile_view();
+        self.emit("backend://profile-changed", &view);
+        for live in &self.vaults {
+            let _ = live.tx.send(VaultReq::ProfileChanged {
+                name: self.profile.name.clone(),
+                color: self.profile.color.clone(),
+                client_id: self.client_id.clone(),
+                contribution_bytes: self.profile.contribution_bytes,
+            });
+        }
+        // A contribution is part of every vault's and every server's capacity.
+        self.emit_servers();
+    }
+
+    /// What every distinct client on one server lends it. Deduplicated by client id across
+    /// the vaults we belong to there: one person's disk is one person's disk, however many
+    /// of that server's vaults they are in.
+    fn server_contributions(&self, server_id: &str) -> u64 {
+        let mut seen: HashMap<&str, u64> = HashMap::new();
+        for live in self
+            .vaults
+            .iter()
+            .filter(|live| live.record.server_id == server_id)
+        {
+            for (client, bytes) in &live.local.contributions {
+                seen.insert(client.as_str(), *bytes);
+            }
+        }
+        seen.values().copied().sum()
+    }
+
+    /// One server's capacity exactly as the home screen draws it: what the host advertises
+    /// plus what its members lend. `create_vault`'s size gate goes through the same call, so
+    /// a user who reads "1.2 TB free" is never then told "Not enough space on this server".
+    fn server_capacity_for(&self, record: &ServerRecord) -> u64 {
+        server_capacity(self.statuses.get(&record.id), record)
+            .saturating_add(self.server_contributions(&record.id))
+    }
+
     /// Every known host, each with the vaults *we* belong to on it.
     fn servers(&self) -> Vec<Server> {
         self.servers
             .iter()
             .map(|record| {
                 let status = self.statuses.get(&record.id);
-                let capacity = server_capacity(status, record);
+                let capacity = self.server_capacity_for(record);
                 let vaults = self
                     .vaults
                     .iter()
                     .filter(|live| live.record.server_id == record.id)
                     .map(|live| {
                         let numbers = status.and_then(|s| s.vault(&live.record.vault_id));
+                        let quota = numbers.map(|v| v.quota_bytes).unwrap_or(0);
+                        let lent: u64 = live.local.contributions.iter().map(|(_, b)| *b).sum();
                         Vault {
                             id: live.record.vault_id.clone(),
                             server_id: record.id.clone(),
-                            name: if live.record.name.is_empty() {
-                                "Vault".to_string()
-                            } else {
+                            // A joiner's `vault.json` has no name until the replicated
+                            // sidecar arrives, so the task's own copy of it comes first.
+                            name: if !live.record.name.is_empty() {
                                 live.record.name.clone()
+                            } else if !live.local.name.is_empty() {
+                                live.local.name.clone()
+                            } else {
+                                "Vault".to_string()
                             },
                             // A code-joined vault sits on a server we have no token for, so
                             // `STATUS` never mentions it: the card falls back to what the vault
@@ -848,7 +1001,8 @@ impl RootState {
                             used_bytes: numbers
                                 .map(|v| v.used_bytes)
                                 .unwrap_or(live.local.used_bytes),
-                            quota_bytes: numbers.map(|v| v.quota_bytes).unwrap_or(0),
+                            quota_bytes: quota,
+                            capacity_bytes: quota.saturating_add(lent),
                             role: match live.record.role {
                                 VaultRole::Owner => Role::Owner,
                                 VaultRole::Member => Role::Member,
@@ -934,6 +1088,7 @@ impl RootState {
             self.data_dir.clone(),
             record.clone(),
             self.profile.clone(),
+            self.client_id.clone(),
             self.emit.clone(),
             self.tx.clone(),
             target,
@@ -1030,6 +1185,149 @@ impl RootState {
     }
 }
 
+/* --------------------------------------------------------------- profile */
+
+/// Validate and store a profile change, then tell the webview and every vault task.
+///
+/// Synchronous on the loop: it writes one small file and sends on channels, and the reply is
+/// what unblocks the onboarding sheet. The directory `PROFILE_PUT` it triggers is not — that
+/// is [`try_put_profile`], which never blocks anything.
+fn set_profile(state: &Root, patch: ProfilePatch) -> Result<ProfileView, String> {
+    let mut root = state.borrow_mut();
+    let mut name = root.profile.name.clone();
+    let mut name_set = root.profile.name_set;
+    if let Some(raw) = patch.name {
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() {
+            return Err("Enter a name".to_string());
+        }
+        if trimmed.chars().count() > MAX_PROFILE_NAME_CHARS {
+            return Err(format!(
+                "That name is too long (max {MAX_PROFILE_NAME_CHARS} characters)"
+            ));
+        }
+        name = trimmed;
+        name_set = true;
+    }
+    let mut contribution = root.profile.contribution_bytes;
+    if let Some(bytes) = patch.contribution_bytes {
+        if bytes < state::MIN_CONTRIBUTION_BYTES || bytes > state::MAX_CONTRIBUTION_BYTES {
+            return Err("Choose between 1 GB and 256 GB".to_string());
+        }
+        contribution = bytes;
+    }
+    let renamed = name != root.profile.name;
+    root.profile.name = name;
+    root.profile.name_set = name_set;
+    root.profile.contribution_bytes = contribution;
+    let profile = root.profile.clone();
+    state::save_profile(&root.data_dir, &profile)
+        .map_err(|_| "Could not save your profile".to_string())?;
+    if renamed {
+        // The store holds the old name; it is stale until a `PROFILE_PUT` lands.
+        root.profile_synced = false;
+        root.profile_put_at = None;
+    }
+    root.publish_profile();
+    Ok(root.profile_view())
+}
+
+/// The directory's profile store: the directory we would resolve a join code against, one
+/// port up. `None` when no directory is known yet, which is the ordinary first-run state.
+impl RootState {
+    fn profile_store_addr(&self) -> Option<SocketAddr> {
+        let known = directory_candidates(self);
+        let addr = state::resolve_directory_addr(&self.data_dir, &known)?;
+        Some(SocketAddr::new(
+            addr.ip(),
+            addr.port().saturating_add(PROFILE_STORE_PORT_OFFSET),
+        ))
+    }
+}
+
+/// Offer this client's name to the directory's profile store, at most once every
+/// [`PROFILE_PUT_INTERVAL`] until one lands. Never blocks a caller and never fails loudly:
+/// the store is a convenience, and a demo without one has to behave exactly as before.
+fn try_put_profile(state: &Root) {
+    let work = {
+        let mut root = state.borrow_mut();
+        if root.profile_synced || !root.profile.name_set {
+            return;
+        }
+        if let Some(at) = root.profile_put_at {
+            if at.elapsed() < PROFILE_PUT_INTERVAL {
+                return;
+            }
+        }
+        let Some(addr) = root.profile_store_addr() else {
+            return;
+        };
+        root.profile_put_at = Some(Instant::now());
+        (addr, root.client_id.clone(), root.profile.name.clone())
+    };
+    let (addr, client_id, name) = work;
+    let state = state.clone();
+    tokio::task::spawn_local(async move {
+        match profile_store::put(addr, &client_id, &name).await {
+            Ok(()) => {
+                let mut root = state.borrow_mut();
+                // A rename that happened while the PUT was in flight leaves it stale again.
+                if root.profile.name == name {
+                    root.profile_synced = true;
+                }
+            }
+            Err(reason) => eprintln!("[profile] name not published: {reason}"),
+        }
+    });
+}
+
+/// Keep trying while the name is not in the store. One timer, not one per event: the events
+/// that would otherwise drive this (`STATUS`, `add_server`) fire far too often.
+async fn poll_profile_sync(state: Root) {
+    loop {
+        tokio::time::sleep(PROFILE_PUT_INTERVAL).await;
+        if state.borrow().profile_synced {
+            continue;
+        }
+        try_put_profile(&state);
+    }
+}
+
+/// A client with no name of its own asks the directory whether it has one on file. A hit is
+/// this machine's own name from before the data directory was wiped, so it is adopted whole
+/// and onboarding never appears.
+async fn adopt_stored_name(state: Root) {
+    let Some((addr, client_id)) = ({
+        let root = state.borrow();
+        root.profile_store_addr()
+            .map(|addr| (addr, root.client_id.clone()))
+    }) else {
+        return;
+    };
+    let name = match profile_store::get(addr, &client_id).await {
+        Ok(Some(name)) => name,
+        Ok(None) => return,
+        Err(reason) => {
+            eprintln!("[profile] no stored name: {reason}");
+            return;
+        }
+    };
+    let mut root = state.borrow_mut();
+    // A human who named themselves while the lookup was in flight wins.
+    if root.profile.name_set {
+        return;
+    }
+    root.profile.name = name;
+    root.profile.name_set = true;
+    let profile = root.profile.clone();
+    if state::save_profile(&root.data_dir, &profile).is_err() {
+        return;
+    }
+    // The store already holds exactly this name.
+    root.profile_synced = true;
+    root.publish_profile();
+}
+
 /* --------------------------------------------------------------- servers */
 
 /// `add_server` takes the connect string the host printed: `IP:PORT/TOKEN`.
@@ -1046,8 +1344,10 @@ async fn add_server(state: &Root, name: String, address: String) -> Result<Serve
     }
     let mut record = ServerRecord {
         id: server_id_for(&addr),
+        // No name given: the address *is* the name. The UI draws a server by where it is,
+        // and "Server at 10.0.0.4" is the same information with a sentence wrapped round it.
         name: if name.trim().is_empty() {
-            format!("Server at {}", host_of(&addr))
+            addr.clone()
         } else {
             name.trim().to_string()
         },
@@ -1125,10 +1425,16 @@ async fn add_server(state: &Root, name: String, address: String) -> Result<Serve
     state::save_servers(&root.data_dir, &root.servers);
     root.push_admin_targets();
     root.emit_servers();
-    root.servers()
+    let answer = root
+        .servers()
         .into_iter()
         .find(|server| server.id == record.id)
-        .ok_or_else(|| "Could not reach that server".to_string())
+        .ok_or_else(|| "Could not reach that server".to_string());
+    drop(root);
+    // A new server usually means a directory we did not have before, which is the first
+    // chance this client has had to publish its name.
+    try_put_profile(state);
+    answer
 }
 
 /// `STATUS` with no token, for a host the user never added: the read-only admin commands need
@@ -1160,7 +1466,7 @@ fn ensure_server(
         None => {
             root.servers.push(ServerRecord {
                 id,
-                name: format!("Server {}", host_of(admin_addr)),
+                name: admin_addr.to_string(),
                 address: admin_addr.to_string(),
                 token: None,
                 host_peer_id: Some(host_peer.to_string()),
@@ -1273,6 +1579,11 @@ fn apply_admin(state: &Root, server_id: &str, result: Result<Box<AdminStatus>, S
             }
             root.statuses.insert(server_id.to_string(), status);
             root.push_admin_targets();
+            drop(root);
+            // A `STATUS` names the host's directory, so this is also the moment a client that
+            // has never reached the profile store gets to try. Rate-limited inside.
+            try_put_profile(state);
+            root = state.borrow_mut();
         }
         Err(message) if message == admin::UNAUTHORIZED => {
             // The token is stale (the host was restarted, or it printed a new connect string).
@@ -1337,10 +1648,11 @@ async fn create_vault(state: &Root, input: CreateVaultInput) -> Result<Vault, St
             .token
             .clone()
             .ok_or("This server was added without a connect string")?;
-        let status = root.statuses.get(&record.id);
         // The same number the server card shows, minus what its vaults already hold.
-        let capacity = server_capacity(status, &record);
-        let allocated: u64 = status
+        let capacity = root.server_capacity_for(&record);
+        let allocated: u64 = root
+            .statuses
+            .get(&record.id)
             .map(|status| status.vaults.iter().map(|v| v.quota_bytes).sum())
             .unwrap_or(0);
         (root.data_dir.clone(), record, token, capacity, allocated)
@@ -1408,6 +1720,7 @@ async fn create_vault(state: &Root, input: CreateVaultInput) -> Result<Vault, St
             name: name.clone(),
             role: VaultRole::Owner,
             directory_addr,
+            joined_once: false,
         };
         state::save_vault(&root.data_dir, &vault_record);
         let profile_peer = root.profile.peer_id.clone();
@@ -1430,7 +1743,9 @@ async fn create_vault(state: &Root, input: CreateVaultInput) -> Result<Vault, St
         return Err(reason);
     }
 
-    // The first `STATUS` is up to a second away, so answer from what we just asked for.
+    // The first `STATUS` is up to a second away, so answer from what we just asked for. The
+    // only member so far is us, so the vault's capacity is its quota plus our own disk.
+    let lent = state.borrow().profile.contribution_bytes;
     Ok(Vault {
         id: vault_hex,
         server_id: record.id,
@@ -1438,6 +1753,7 @@ async fn create_vault(state: &Root, input: CreateVaultInput) -> Result<Vault, St
         member_count: 1,
         used_bytes: 0,
         quota_bytes: input.quota_bytes,
+        capacity_bytes: input.quota_bytes.saturating_add(lent),
         role: Role::Owner,
     })
 }
@@ -1520,6 +1836,7 @@ async fn join_vault(state: &Root, raw: &str) -> Result<Vault, String> {
             name: String::new(),
             role: VaultRole::Member,
             directory_addr,
+            joined_once: false,
         };
         state::save_vault(&root.data_dir, &record);
         root.start_vault(record, None);
@@ -1782,18 +2099,12 @@ async fn drop_vault(state: &Root, vault_id: &str) {
 
 /* ------------------------------------------------------------- free helpers */
 
-/// One server's capacity, exactly as the home screen draws it: what the host advertises plus a
-/// credit for every online member that is not the host.
-///
-/// `create_vault`'s size gate and [`RootState::servers`] must never disagree — a user who reads
-/// "1.2 TB free" and is then told "Not enough space on this server" has hit that bug — so both
-/// go through this one function.
+/// What the host itself provides, before any member lends it disk. Callers want
+/// [`RootState::server_capacity_for`], which adds the members' own contributions on top;
+/// this half is separate only because it needs nothing but the one server's own numbers.
 fn server_capacity(status: Option<&AdminStatus>, record: &ServerRecord) -> u64 {
     match status {
-        Some(status) => {
-            status.server.capacity_bytes
-                + (status.online_members_excluding_host() as f64 * MEMBER_CREDIT_BYTES) as u64
-        }
+        Some(status) => status.server.capacity_bytes,
         None if record.capacity_bytes > 0 => record.capacity_bytes,
         None => DEFAULT_CAPACITY_BYTES,
     }
@@ -1847,9 +2158,4 @@ fn admin_addr_for(peer_addr: SocketAddr) -> String {
         peer_addr.port().saturating_add(ADMIN_PORT_OFFSET),
     )
     .to_string()
-}
-
-/// The IP half of `ip:port`, for a default server name.
-fn host_of(address: &str) -> &str {
-    address.rsplit_once(':').map(|(host, _)| host).unwrap_or(address)
 }

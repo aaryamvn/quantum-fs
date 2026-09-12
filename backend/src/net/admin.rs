@@ -62,14 +62,49 @@ pub async fn serve_admin(listener: TcpListener, ctx: AdminContext) -> Result<()>
         tokio::task::spawn_local(async move {
             let _permit = permit;
             if let Err(error) = serve_connection(stream, ctx).await {
-                demo_log::event(
-                    Kind::Warning,
-                    "LOCAL",
-                    "admin: connection closed",
-                    &[format!("reason  {error}")],
-                );
+                report_close(&error);
             }
         });
+    }
+}
+
+/// The desktop app opens a fresh admin connection roughly every second and
+/// drops it, so ordinary hang-ups are not incidents: an idle timeout or an EOF
+/// says nothing at all, a reset says it quietly, and only a real protocol or
+/// storage failure — a bad token included — earns a red ATTENTION line.
+fn report_close(error: &Error) {
+    match error {
+        Error::State("admin idle timeout") => {}
+        Error::Io(io)
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            ) =>
+        {
+            demo_log::event(
+                Kind::Sync,
+                "LOCAL",
+                "admin: app disconnected mid-reply",
+                &[format!("reason  {error}")],
+            );
+        }
+        Error::State("admin write timeout") => {
+            demo_log::event(
+                Kind::Sync,
+                "LOCAL",
+                "admin: app disconnected mid-reply",
+                &[format!("reason  {error}")],
+            );
+        }
+        _ => demo_log::event(
+            Kind::Warning,
+            "LOCAL",
+            "admin: connection closed",
+            &[format!("reason  {error}")],
+        ),
     }
 }
 

@@ -3,6 +3,11 @@ import type { OrchestrationServer } from "./types";
 /**
  * Design-time data. Kept byte-for-byte in step with the seed in
  * `client/src-tauri/src/bridge.rs` so the mock and the Tauri build look identical.
+ *
+ * `capacityBytes` on a vault is the host's quota plus what its members pledge, so
+ * these numbers are the sum of `quotaBytes` and the `contributionBytes` of that
+ * vault's member list in `seed/fs.json`. `FsEngine` recomputes them from the
+ * member lists on construction, which is what keeps the two files honest.
  */
 export const SEED_SERVERS: OrchestrationServer[] = [
   {
@@ -20,6 +25,7 @@ export const SEED_SERVERS: OrchestrationServer[] = [
         memberCount: 5,
         usedBytes: 1288490189,
         quotaBytes: 4294967296,
+        capacityBytes: 77309411328,
         role: "owner",
       },
       {
@@ -29,6 +35,7 @@ export const SEED_SERVERS: OrchestrationServer[] = [
         memberCount: 5,
         usedBytes: 671088640,
         quotaBytes: 2147483648,
+        capacityBytes: 45097156608,
         role: "member",
       },
       {
@@ -38,6 +45,7 @@ export const SEED_SERVERS: OrchestrationServer[] = [
         memberCount: 2,
         usedBytes: 9019431322,
         quotaBytes: 17179869184,
+        capacityBytes: 34359738368,
         role: "member",
       },
     ],
@@ -57,6 +65,7 @@ export const SEED_SERVERS: OrchestrationServer[] = [
         memberCount: 4,
         usedBytes: 327155712,
         quotaBytes: 1073741824,
+        capacityBytes: 39728447488,
         role: "member",
       },
       {
@@ -66,6 +75,7 @@ export const SEED_SERVERS: OrchestrationServer[] = [
         memberCount: 2,
         usedBytes: 26413435289,
         quotaBytes: 68719476736,
+        capacityBytes: 94489280512,
         role: "owner",
       },
     ],

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # quantam-fs demo: the three server processes on the host machine.
 #   start   central directory + orchestration servers A and B, each in its own
-#           Terminal window, then print the app connect strings.
+#           Terminal window under demo_supervise.sh (caffeinated, auto-restarting),
+#           then print the app connect strings and write $DIR/connect.txt.
 #   stop    kill them, keep their data.
 #   status  which demo ports are listening.
+#   wipe    stop, then delete every server, seed and host-client directory.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND_DIR="$REPO_ROOT/backend"
 
 BIN="$BACKEND_DIR/target/release/qfsd"
+SUPERVISE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/demo_supervise.sh"
 DIR="/tmp/qfs-demo"
 IP=""
 FRESH=0
@@ -20,25 +23,35 @@ A_PORT=7447
 A_ADMIN=8447
 B_PORT=7448
 B_ADMIN=8448
+PROFILE_PORT=8440         # the directory's profile store (see backend/README.md)
+STOP_FLAG="$DIR/stop"     # its existence tells every supervisor to stay down
+CONNECT_FILE="$DIR/connect.txt"
 
 usage() {
   cat <<'EOF'
-usage: demo_servers.sh start|stop|status [--bin PATH] [--dir DIR] [--ip LAN_IP] [--fresh]
+usage: demo_servers.sh start|stop|status|wipe [--bin PATH] [--dir DIR] [--ip LAN_IP] [--fresh]
 
-  start   launch central directory + servers A and B in three Terminal windows
+  start   launch central directory + servers A and B in three Terminal windows,
+          each supervised (auto-restart) and caffeinated until you stop them
   stop    terminate them (data under --dir is kept)
-  status  report whether ports 7440/7447/8447/7448/8448 are listening
+  status  report whether ports 7440/8440/7447/8447/7448/8448 are listening
+  wipe    stop, then delete the server data dirs, logs, connect.txt, the seed
+          tree, the seeder data dir and every client-* dir (app/ is kept)
 
   --bin PATH   qfsd binary (default: backend/target/release/qfsd, built if missing)
   --dir DIR    demo data root (default: /tmp/qfs-demo)
   --ip IP      advertise this LAN IP instead of the auto-detected one
-  --fresh      delete the three server data dirs and logs (start only)
+  --fresh      delete the three server data dirs, logs and connect.txt (start only)
+
+Each node runs under demo_supervise.sh: if qfsd exits it is restarted two
+seconds later, and the whole thing sits under `caffeinate -dimsu`. Close the
+window (Ctrl-C, or Cmd-W) or run `demo_servers.sh stop` to make it stay down.
 EOF
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    start|stop|status) ACTION="$1"; shift ;;
+    start|stop|status|wipe) ACTION="$1"; shift ;;
     --bin) BIN="$2"; shift 2 ;;
     --dir) DIR="$2"; shift 2 ;;
     --ip)  IP="$2"; shift 2 ;;
@@ -49,6 +62,10 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$ACTION" ]; then usage >&2; exit 2; fi
+
+# --dir may have moved the demo root after the defaults above were set.
+STOP_FLAG="$DIR/stop"
+CONNECT_FILE="$DIR/connect.txt"
 
 detect_ip() {
   local ip iface
@@ -88,13 +105,17 @@ end tell
 EOF
 }
 
+# One node in one Terminal window, wrapped in demo_supervise.sh so it restarts
+# itself (and holds a caffeinate assertion) until the stop flag appears or the
+# human closes the window.
 launch_node() {
   local title="$1" logname="$2"; shift 2
   local cmd
-  cmd="cd $(printf '%q' "$BACKEND_DIR") && FORCE_COLOR=1 $(printf '%q' "$BIN")"
+  cmd="cd $(printf '%q' "$BACKEND_DIR") && $(printf '%q' "$SUPERVISE")"
+  cmd="$cmd $(printf '%q' "$logname") $(printf '%q' "$DIR/$logname.log") $(printf '%q' "$STOP_FLAG") --"
+  cmd="$cmd $(printf '%q' "$BIN")"
   local arg
   for arg in "$@"; do cmd="$cmd $(printf '%q' "$arg")"; done
-  cmd="$cmd 2>&1 | tee -a $(printf '%q' "$DIR/$logname.log")"
   terminal_run "$title" "$cmd"
 }
 
@@ -139,6 +160,7 @@ do_start() {
     echo "clearing server data in $DIR (app/, vm-*.log and client-host kept)"
     rm -rf "$DIR/central" "$DIR/server-a" "$DIR/server-b"
     rm -f "$DIR/central.log" "$DIR/server-a.log" "$DIR/server-b.log" "$DIR/pids"
+    rm -f "$CONNECT_FILE" "$STOP_FLAG"
   fi
 
   if [ ! -x "$BIN" ]; then
@@ -157,6 +179,9 @@ do_start() {
   fi
 
   mkdir -p "$DIR/central" "$DIR/server-a" "$DIR/server-b"
+  # A leftover flag from the last `stop` would make every supervisor quit after
+  # its first run, so it goes before anything is launched.
+  rm -f "$STOP_FLAG"
   : >"$DIR/central.log"
   : >"$DIR/server-a.log"
   : >"$DIR/server-b.log"
@@ -192,13 +217,28 @@ do_start() {
   a="${A_LINE#app connect string }"
   b="${B_LINE#app connect string }"
 
+  # The seeder and the human both read connect.txt rather than re-scraping logs.
+  {
+    echo "DIRECTORY ${central}"
+    echo "SERVER_A ${a}"
+    echo "SERVER_B ${b}"
+  } >"$CONNECT_FILE"
+
+  local profile
+  profile="$(scrape_line "$DIR/central.log" 'profile address [^[:space:]]+')"
+  profile="${profile#profile address }"
+
   echo
   echo "──────────── quantam-fs demo servers ────────────"
   echo "DIRECTORY  ${central:-"(not seen yet — check $DIR/central.log)"}"
+  if [ -n "$profile" ]; then
+    echo "PROFILES   $profile"
+  fi
   echo "SERVER A   ${a:-"(not seen yet — check $DIR/server-a.log)"}"
   echo "SERVER B   ${b:-"(not seen yet — check $DIR/server-b.log)"}"
   echo
   echo "Paste a connect string into the app's \"Add server\" field."
+  echo "connect.txt: $CONNECT_FILE"
   echo
   echo "Combined demo log (corner terminal):"
   echo "  python3 $REPO_ROOT/backend/demo_monitor.py \\"
@@ -210,6 +250,10 @@ do_start() {
 
 do_stop() {
   echo "stopping demo servers (data in $DIR is kept)"
+  # The flag goes down before anything is killed: each supervisor checks it when
+  # its qfsd exits, and without it they would all cheerfully restart.
+  mkdir -p "$DIR"
+  : >"$STOP_FLAG"
   if [ -f "$DIR/pids" ]; then
     local p
     while read -r p; do
@@ -235,6 +279,7 @@ do_status() {
   echo "demo dir: $DIR"
   local entry port label
   for entry in "$DIR_PORT:central directory" \
+               "$PROFILE_PORT:directory profile store" \
                "$A_PORT:server A peers" "$A_ADMIN:server A admin" \
                "$B_PORT:server B peers" "$B_ADMIN:server B admin"; do
     port="${entry%%:*}"
@@ -247,8 +292,31 @@ do_status() {
   done
 }
 
+# Everything the demo generates, gone: servers, logs, the seed tree, the seeder's
+# data dir and every client-* dir. The built app bundle and its tarball stay --
+# rebuilding those takes minutes and they hold no state.
+do_wipe() {
+  do_stop
+  echo
+  echo "wiping demo state in $DIR (app/ and QuantumFS.app.tgz are kept)"
+  local target
+  for target in "$DIR/central" "$DIR/server-a" "$DIR/server-b" \
+                "$DIR/pids" "$CONNECT_FILE" "$DIR/seed" "$DIR/seeder" \
+                "$DIR"/*.log "$DIR"/client-*; do
+    case "$target" in
+      "$DIR/app"|"$DIR/QuantumFS.app.tgz") continue ;;
+      *'*'*) continue ;;   # an unmatched glob, not a real path
+    esac
+    [ -e "$target" ] || continue
+    rm -rf "$target"
+    echo "  removed $target"
+  done
+  echo 'wiped. (the stop flag stays until the next start, so nothing revives)'
+}
+
 case "$ACTION" in
   start)  do_start ;;
   stop)   do_stop ;;
   status) do_status ;;
+  wipe)   do_wipe ;;
 esac

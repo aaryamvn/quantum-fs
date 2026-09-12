@@ -17,6 +17,8 @@ import type {
   PeerCursor,
   PeerId,
   PeerPresence,
+  Profile,
+  ProfilePatch,
   Recent,
   SearchHit,
   SearchQuery,
@@ -153,6 +155,21 @@ export interface BackendClient {
 
   /** The local user, as a `Member` (so avatars and presence share one shape). */
   me(): Promise<Member>;
+  /**
+   * The local profile: who this client says it is, and what it contributes.
+   *
+   * `nameSet` is false on a fresh install and only that; the app asks for a name
+   * once and never again. Always resolves — there is a profile from the first
+   * launch, it is simply unnamed.
+   */
+  getProfile(): Promise<Profile>;
+  /**
+   * Update the local profile. A blank or over-long `name` rejects with
+   * `Error("Enter your name")` / `Error("That name is too long")`; anything the
+   * patch omits is left alone. Setting a name flips `nameSet` to true, renames
+   * this member on every vault's list, and emits `profile-changed`.
+   */
+  setProfile(patch: ProfilePatch): Promise<Profile>;
   /** Every node of a vault, root included; the tree is small because it is replicated. */
   listTree(vaultId: VaultId): Promise<FsNode[]>;
   createNode(input: CreateNodeInput): Promise<FsNode>;

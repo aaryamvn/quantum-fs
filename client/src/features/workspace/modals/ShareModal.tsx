@@ -138,7 +138,7 @@ export function ShareModal() {
           <span
             data-selectable
             className="flex h-[34px] min-w-0 flex-1 items-center gap-[8px] truncate rounded-[8px]
-              border border-line bg-bg px-[10px] text-[12.5px] leading-none text-fg-2"
+              border border-line bg-field px-[10px] text-[12.5px] leading-none text-fg-2"
             style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
           >
             <Link size={14} strokeWidth={1.75} className="shrink-0 text-fg-3" aria-hidden />
@@ -164,7 +164,7 @@ export function ShareModal() {
             <span
               key={i}
               className="grid h-[36px] flex-1 place-items-center rounded-[8px] border border-line-strong
-                bg-bg text-[18px] leading-none font-medium text-fg uppercase tabular-nums"
+                bg-field text-[18px] leading-none font-medium text-fg uppercase tabular-nums"
             >
               {/* Keyed on the code so a rotation crossfades rather than swapping characters. */}
               <AnimatePresence mode="wait" initial={false}>

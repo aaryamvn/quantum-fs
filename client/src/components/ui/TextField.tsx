@@ -55,7 +55,7 @@ export function TextField({
           onEnter?.();
         }
       }}
-      className="h-[44px] w-full rounded-[10px] border bg-bg px-[14px] text-[15px] text-fg outline-none
+      className="h-[44px] w-full rounded-[10px] border bg-field px-[14px] text-[15px] text-fg outline-none
         transition-[border-color] duration-[160ms] ease-[cubic-bezier(0.2,0.8,0.2,1)]
         placeholder:text-fg-3"
       style={{

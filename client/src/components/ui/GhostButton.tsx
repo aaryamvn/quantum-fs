@@ -17,7 +17,7 @@ export interface GhostButtonProps {
 const EASE = "ease-[cubic-bezier(0.2,0.8,0.2,1)]";
 
 /**
- * The action-bar button, lifted verbatim from "Setup New Server" on the home
+ * The action-bar button, lifted verbatim from "Add a Server" on the home
  * screen so the workspace speaks the same language: a label in fg-3 that warms
  * to fg on hover, with the surface only appearing under the pointer. Nothing
  * here is filled — PrimaryButton is the single loud control in the app, and a

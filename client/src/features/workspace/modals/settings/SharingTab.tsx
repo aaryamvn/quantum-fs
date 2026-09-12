@@ -73,7 +73,7 @@ export function SharingTab() {
               key={i}
               data-selectable
               className="grid h-[52px] min-w-0 flex-1 basis-0 place-items-center rounded-[10px]
-                border border-line-strong bg-bg text-[20px] leading-none font-medium text-fg uppercase"
+                border border-line-strong bg-field text-[20px] leading-none font-medium text-fg uppercase"
             >
               {code[i] ?? ""}
             </span>

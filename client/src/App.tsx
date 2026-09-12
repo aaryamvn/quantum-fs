@@ -1,4 +1,11 @@
-import { animate, LayoutGroup, motion, useMotionValue, useReducedMotion } from "motion/react";
+import {
+  animate,
+  AnimatePresence,
+  LayoutGroup,
+  motion,
+  useMotionValue,
+  useReducedMotion,
+} from "motion/react";
 import type { AnimationPlaybackControls } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -6,6 +13,7 @@ import { useAppShell } from "@/app/appShell";
 import { DragRegion } from "@/components/chrome/DragRegion";
 import { IconGallery } from "@/features/dev/IconGallery";
 import { HomeScreen } from "@/features/home";
+import { OnboardingScreen } from "@/features/onboarding";
 import { ColorField } from "@/features/splash/ColorField";
 import { GrainOverlay } from "@/features/splash/GrainOverlay";
 import { resolveField } from "@/features/splash/shaders";
@@ -24,6 +32,15 @@ const RETURN_MS = 260;
 /** The workspace fades up under the dive's still-opaque fill. */
 const WORKSPACE_IN_MS = 300;
 
+/**
+ * The onboarding → home handoff: one horizontal slide, the question leaving to
+ * the left as the list arrives from the right. Shorter out than in, so the
+ * answer feels taken rather than mulled over.
+ */
+const ONBOARD_OUT_MS = 320;
+const HOME_SLIDE_IN_MS = 380;
+const SLIDE_PX = 32;
+
 /** The color field blooms while the dive expands, then drains back to its panel width. */
 const PANEL_REST = 0.45;
 const PANEL_BLOOM = 1.0;
@@ -33,8 +50,15 @@ const PANEL_DOWN_MS = 600;
 /** Above the grain (z-1) so the home keeps the layering it has on its own. */
 const HOME_Z = 2;
 
-const HOME_AT_REST = { opacity: 1, scale: 1, filter: "blur(0px)" } as const;
-const HOME_RECEDED = { opacity: 0, scale: 0.97, filter: "blur(8px)" } as const;
+const HOME_AT_REST = { opacity: 1, scale: 1, filter: "blur(0px)", x: 0 } as const;
+const HOME_RECEDED = { opacity: 0, scale: 0.97, filter: "blur(8px)", x: 0 } as const;
+/** Only after onboarding: the list comes in from the right rather than out of a blur. */
+const HOME_FROM_ONBOARDING = {
+  opacity: 0,
+  scale: 1,
+  filter: "blur(0px)",
+  x: SLIDE_PX,
+} as const;
 
 /** The vault open detail carried by the `qfs:open-vault` window event. */
 interface OpenVaultDetail {
@@ -74,6 +98,8 @@ function Shell() {
   const screen = useAppShell((s) => s.screen);
   const pending = useAppShell((s) => s.pending);
   const enterVault = useAppShell((s) => s.enterVault);
+  const startOnboarding = useAppShell((s) => s.startOnboarding);
+  const finishOnboarding = useAppShell((s) => s.finishOnboarding);
   const switchVault = useAppShell((s) => s.switchVault);
   const diveDone = useAppShell((s) => s.diveDone);
   const goHome = useAppShell((s) => s.goHome);
@@ -96,7 +122,12 @@ function Shell() {
 
   /** True once the shell has ever left home: only then is coming back a crossfade. */
   const leftHome = useRef(false);
-  if (screen.kind !== "home") leftHome.current = true;
+  // Onboarding is *before* the home, not a place the home was left for: counting
+  // it would make the list arrive out of the dive's blur instead of sliding in.
+  if (screen.kind === "dive" || screen.kind === "workspace") leftHome.current = true;
+
+  /** The home is arriving from the onboarding answer, so it slides rather than blurs. */
+  const [fromOnboarding, setFromOnboarding] = useState(false);
 
   // One attach for the life of the app. Idempotent: it is a plain assignment in
   // the store, so a StrictMode double-mount costs nothing.
@@ -122,6 +153,24 @@ function Shell() {
       alive = false;
     };
   }, [client]);
+
+  // A machine nobody has named yet is asked once, before the list: the profile is
+  // the daemon's (the mock keeps it in memory), so this is a read like any other.
+  // A failure is silent on purpose — an unnamed profile is a nicety, and the home
+  // list is still the app.
+  useEffect(() => {
+    let alive = true;
+    void client
+      .getProfile()
+      .then((profile) => {
+        if (!alive || profile.nameSet) return;
+        startOnboarding();
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [client, startOnboarding]);
 
   // Screenshot path: `?vault=` lands straight in the workspace, no dive. The
   // splash is already skipped by devQuery, so there is nothing to wait for.
@@ -188,12 +237,25 @@ function Shell() {
     [enterVault],
   );
 
+  const handleOnboardingDone = useCallback(() => {
+    setFromOnboarding(true);
+    finishOnboarding();
+    // The name just changed under `me()`, and the sidebar's profile row reads it.
+    void client
+      .me()
+      .then((me) => {
+        useWorkspace.getState().attach(client, me);
+      })
+      .catch(() => {});
+  }, [client, finishOnboarding]);
+
   const handleReveal = useCallback(() => {
     const current = useAppShell.getState().pending;
     if (current !== null) setRevealedSeq(current.seq);
   }, []);
 
   const atHome = screen.kind === "home";
+  const onboarding = screen.kind === "onboarding";
   const showWorkspace =
     screen.kind === "workspace" ||
     (screen.kind === "dive" && pending !== null && pending.seq === revealedSeq);
@@ -236,16 +298,54 @@ function Shell() {
         one to the other only happens if Motion sees them as the same element.
       */}
       <LayoutGroup id="vault-shell">
-        {screen.kind !== "workspace" ? (
+        {/*
+          The question lives where the home's column does, so the wordmark stays
+          put while everything under it is exchanged: onboarding leaves to the
+          left, the list arrives from the right. Gated on the splash exactly like
+          the home, or the field would be typed into behind the intro.
+        */}
+        <AnimatePresence>
+          {onboarding && tl.phase === "settled" ? (
+            <motion.div
+              key="onboarding"
+              className="fixed inset-0"
+              style={{ zIndex: HOME_Z }}
+              initial={{ opacity: 1, x: 0 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={reduced ? { opacity: 0 } : { opacity: 0, x: -SLIDE_PX }}
+              transition={reduced ? { duration: 0 } : { duration: ONBOARD_OUT_MS / 1000, ease: EASE }}
+            >
+              <OnboardingScreen onDone={handleOnboardingDone} />
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
+        {screen.kind !== "workspace" && !onboarding ? (
           <motion.div
             className="fixed inset-0"
             // Sized to the window so the home's own `fixed` children keep their
             // geometry: a transformed ancestor is their containing block.
             style={{ zIndex: HOME_Z, pointerEvents: atHome ? "auto" : "none" }}
-            initial={leftHome.current ? HOME_RECEDED : false}
+            initial={
+              leftHome.current
+                ? HOME_RECEDED
+                : fromOnboarding && !reduced
+                  ? HOME_FROM_ONBOARDING
+                  : false
+            }
             animate={atHome ? HOME_AT_REST : HOME_RECEDED}
             transition={
-              reduced ? { duration: 0 } : { duration: (atHome ? RETURN_MS : RECEDE_MS) / 1000, ease: EASE }
+              reduced
+                ? { duration: 0 }
+                : {
+                    duration:
+                      (atHome
+                        ? fromOnboarding && !leftHome.current
+                          ? HOME_SLIDE_IN_MS
+                          : RETURN_MS
+                        : RECEDE_MS) / 1000,
+                    ease: EASE,
+                  }
             }
           >
             <HomeScreen revealed={tl.phase === "settled"} onOpenVault={handleOpenVault} />

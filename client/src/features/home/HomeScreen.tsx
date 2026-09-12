@@ -190,7 +190,7 @@ export function HomeScreen({ revealed, onOpenVault }: Props) {
           <div ref={content}>
             <motion.h1
               variants={v.lockup}
-              className="text-[34px] leading-none font-medium tracking-[-0.02em] text-fg"
+              className="font-heading text-[34px] leading-none font-medium tracking-[-0.02em] text-fg"
               style={{ marginBottom: GAP_LOCKUP }}
             >
               {APP_NAME}
@@ -227,7 +227,6 @@ export function HomeScreen({ revealed, onOpenVault }: Props) {
               {servers.map((server) => (
                 <motion.div key={server.id} variants={v.row}>
                   <ServerHeading
-                    name={server.name}
                     address={server.address}
                     online={server.online}
                     onAdd={() => setVaultTarget(server)}
@@ -284,7 +283,7 @@ export function HomeScreen({ revealed, onOpenVault }: Props) {
         }}
       >
         <ServerPlusGlyph />
-        <span className="text-[13px] leading-none font-medium">Setup New Server</span>
+        <span className="text-[13px] leading-none font-medium">Add a Server</span>
       </motion.button>
 
       <SetupServerModal open={setupOpen} onClose={() => setSetupOpen(false)} />

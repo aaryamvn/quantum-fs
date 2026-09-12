@@ -43,10 +43,30 @@ export function useWorkspaceEvents(): void {
           if (event.vaultId !== openVaultId) return;
           store.setPresence(event.peers);
           return;
-        case "members-changed":
+        case "members-changed": {
           if (event.vaultId !== openVaultId) return;
-          void store.refreshMembers();
+          // The list before the read, so the refresh can be told what actually
+          // changed. A vault's membership is the one thing that alters what other
+          // people can see, so it is announced rather than silently redrawn.
+          const before = store.members;
+          void store.refreshMembers().then(() => {
+            const next = useWorkspace.getState();
+            // Still the same vault, and not the first load: the initial read has
+            // nothing to diff against and would toast the whole roster at once.
+            if (next.vaultId !== event.vaultId || before.length === 0) return;
+            const had = new Set(before.map((m) => m.peerId));
+            const has = new Set(next.members.map((m) => m.peerId));
+            for (const member of before) {
+              if (member.isSelf || has.has(member.peerId)) continue;
+              next.toast(`${member.name} was removed from the vault`, "info");
+            }
+            for (const member of next.members) {
+              if (member.isSelf || had.has(member.peerId)) continue;
+              next.toast(`${member.name} joined`, "success");
+            }
+          });
           return;
+        }
         case "vault-changed":
           if (event.vaultId !== openVaultId) return;
           void store.refreshVaultMeta();

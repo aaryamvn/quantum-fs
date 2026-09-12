@@ -127,20 +127,26 @@ export function AccessSummary({ node }: AccessSummaryProps) {
       <div className="flex items-center gap-[8px]">
         <div className="flex shrink-0 items-center">
           {faces.slice(0, MAX_FACES).map((member, index) => (
-            <Avatar
+            // Left-most on top: DOM order would otherwise lay each face over the
+            // one before it, which reads as a stack running the wrong way.
+            <span
               key={member.peerId}
-              peerId={member.peerId}
-              name={member.name}
-              initials={member.initials}
-              size={18}
-              title={member.name}
-              className={index === 0 ? "" : "-ml-[6px]"}
-            />
+              className={`relative flex ${index === 0 ? "" : "-ml-[6px]"}`}
+              style={{ zIndex: MAX_FACES - index }}
+            >
+              <Avatar
+                peerId={member.peerId}
+                name={member.name}
+                initials={member.initials}
+                size={18}
+                title={member.name}
+              />
+            </span>
           ))}
           {faces.length > MAX_FACES ? (
-            // Positioned and lifted: the faces are `relative`, so an unpositioned
-            // chip would slide under the last avatar instead of over it.
-            <span className="relative z-[1] -ml-[6px] grid h-[18px] w-[18px] place-items-center rounded-full border border-line-strong bg-surface-2 text-[9px] text-fg-3">
+            // The bottom of the stack, like the "+N" disc in the topbar: it is the
+            // right-most thing in the row, so it tucks under the face beside it.
+            <span className="relative z-0 -ml-[6px] grid h-[18px] w-[18px] place-items-center rounded-full border border-line-strong bg-surface-2 text-[9px] text-fg-3">
               +{faces.length - MAX_FACES}
             </span>
           ) : null}

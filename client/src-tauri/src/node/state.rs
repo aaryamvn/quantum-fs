@@ -26,6 +26,7 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use quantam_fs::net::{short_code, JoinCode};
 
@@ -47,21 +48,36 @@ pub struct Profile {
     pub peer_id: String,
     pub name: String,
     pub color: String,
+    /// Has a human actually named themselves? A `profile.json` written before this field
+    /// existed has no `nameSet`, so it defaults to false and that client re-onboards once —
+    /// deterministic, and the old value was only ever a `$USER` guess anyway.
+    #[serde(default)]
+    pub name_set: bool,
+    /// How much local disk this client lends every vault it is a member of.
+    #[serde(default = "default_contribution")]
+    pub contribution_bytes: u64,
 }
+
+/// What a client contributes until the human says otherwise: 8 GiB.
+pub fn default_contribution() -> u64 {
+    8 * 1024 * 1024 * 1024
+}
+
+/// The smallest and largest contribution `set_profile` accepts: 1 GiB .. 256 GiB.
+pub const MIN_CONTRIBUTION_BYTES: u64 = 1024 * 1024 * 1024;
+pub const MAX_CONTRIBUTION_BYTES: u64 = 256 * 1024 * 1024 * 1024;
 
 impl Profile {
     fn generate() -> Self {
         // 12 random bytes -> 24 hex characters, the `me_` form every unit expects.
         let peer_id = format!("me_{}", hex(&random_12()));
-        let name = std::env::var("USER")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "You".to_string());
         let color = color_for(&peer_id);
         Profile {
             peer_id,
-            name,
+            name: String::new(),
             color,
+            name_set: false,
+            contribution_bytes: default_contribution(),
         }
     }
 }
@@ -116,6 +132,10 @@ pub struct VaultRecord {
     pub role: VaultRole,
     /// `ip:port` of the central directory that resolves this vault's join code.
     pub directory_addr: String,
+    /// The vault task has been admitted at least once. Persisted so a later restart can tell
+    /// "never got in" from "was in and is not any more".
+    #[serde(default)]
+    pub joined_once: bool,
 }
 
 /// Dates and authors for one node. The protocol carries neither, so first sight counts as
@@ -307,8 +327,73 @@ pub fn load_profile(data_dir: &Path) -> Profile {
         }
     }
     let profile = Profile::generate();
-    write_json(&path, &profile);
+    let _ = save_profile(data_dir, &profile);
     profile
+}
+
+/// Write `profile.json` atomically. Unlike the other savers this one reports failure: the
+/// onboarding sheet must not tell a human their name is stored when the disk said no.
+pub fn save_profile(data_dir: &Path, profile: &Profile) -> std::io::Result<()> {
+    let path = profile_path(data_dir);
+    let bytes = serde_json::to_vec_pretty(profile)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::create_dir_all(data_dir)?;
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, &bytes)?;
+    std::fs::rename(&temp, &path)
+}
+
+/// A stable id for this *client* — this machine plus this data directory — as 32 lowercase
+/// hex characters. Never written down: it is recomputed at every start, so a data directory
+/// copied to another Mac becomes a different client rather than a duplicate of the first.
+///
+/// `fallback` is the profile's `peer_id`, used when the platform has no machine id to give.
+pub fn client_id(data_dir: &Path, fallback: &str) -> String {
+    let machine = platform_uuid().unwrap_or_else(|| fallback.to_string());
+    let canonical = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    let mut hash = Sha256::new();
+    hash.update(b"qfs/v1/client-id/");
+    hash.update(machine.as_bytes());
+    hash.update(b"\0");
+    hash.update(canonical.as_os_str().as_encoded_bytes());
+    let digest: [u8; 32] = hash.finalize().into();
+    hex(&digest[..16])
+}
+
+/// The machine's own identifier, as the OS states it. `None` when neither source answers.
+fn platform_uuid() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            if !line.contains("IOPlatformUUID") {
+                continue;
+            }
+            // `    "IOPlatformUUID" = "0A1B..."`
+            let Some((_, raw)) = line.rsplit_once('=') else {
+                continue;
+            };
+            let value = raw.trim().trim_matches('"').to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let text = std::fs::read_to_string("/etc/machine-id").ok()?;
+        let value = text.trim().to_string();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    }
 }
 
 pub fn load_servers(data_dir: &Path) -> Vec<ServerRecord> {

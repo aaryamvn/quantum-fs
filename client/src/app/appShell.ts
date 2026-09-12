@@ -44,6 +44,8 @@ export interface VaultOpenRequest {
 
 export type Screen =
   | { kind: "home" }
+  /** First launch only: the app has no name for this machine's person yet. */
+  | { kind: "onboarding" }
   | {
       kind: "dive";
       vaultId: VaultId;
@@ -74,6 +76,16 @@ export interface AppShellActions {
   goHome(): void;
   /** Vault → vault from inside the workspace. No dive: the shell is already there. */
   switchVault(vaultId: VaultId, opts?: VaultOpenOptions): void;
+  /**
+   * The profile has no name yet: ask for one before the home list.
+   *
+   * Only ever from the overview. A deep link (`?vault=`) has already moved on,
+   * and yanking someone out of a vault they asked for would be worse than a
+   * missing name.
+   */
+  startOnboarding(): void;
+  /** The name is stored: slide the home list in. */
+  finishOnboarding(): void;
 }
 
 export type AppShellStore = AppShellState & AppShellActions;
@@ -124,5 +136,15 @@ export const useAppShell = create<AppShellStore>()((set, get) => ({
 
   switchVault(vaultId, opts) {
     set({ screen: { kind: "workspace", vaultId }, pending: request(vaultId, opts) });
+  },
+
+  startOnboarding() {
+    if (get().screen.kind !== "home") return;
+    set({ screen: { kind: "onboarding" } });
+  },
+
+  finishOnboarding() {
+    if (get().screen.kind !== "onboarding") return;
+    set({ screen: { kind: "home" } });
   },
 }));

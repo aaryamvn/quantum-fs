@@ -97,7 +97,7 @@ export function ConfirmDeleteModal() {
       size="sm"
     >
       <div data-testid="confirm-delete-modal">
-        <div className="rounded-[10px] border border-line bg-bg px-[12px] py-[8px]">
+        <div className="rounded-[10px] border border-line bg-field px-[12px] py-[8px]">
           {items.slice(0, MAX_LISTED).map((node) => (
             <div
               key={node.id}

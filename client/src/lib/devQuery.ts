@@ -15,6 +15,7 @@
  *   ?demo=off         no scripted peers at all
  *   ?demo=<ms>        scripted peers frozen at this elapsed time (default: "on")
  *   ?select=<ids>     preselect one or more nodes, comma separated
+ *   ?onboard=1        mock profile starts unnamed, so the app opens on onboarding
  */
 export interface DevQuery {
   /** Frozen timeline position in ms, or null when the splash should play. */
@@ -33,6 +34,8 @@ export interface DevQuery {
   demo: "on" | "off" | number;
   /** Node ids to preselect, comma separated, or null for no selection. */
   select: string | null;
+  /** Browser mock only: start with an unnamed profile, i.e. a first launch. */
+  onboard: boolean;
   /** OS-level reduced-motion preference. */
   reduced: boolean;
 }
@@ -48,6 +51,7 @@ function parse(): DevQuery {
       ui: null,
       demo: "on",
       select: null,
+      onboard: false,
       reduced: false,
     };
   }
@@ -91,6 +95,13 @@ function parse(): DevQuery {
     ui: nonEmpty(params.get("ui")),
     demo,
     select: nonEmpty(params.get("select")),
+    // Any value but an explicit "0"/"false" turns it on: `?onboard` alone should work.
+    onboard: (() => {
+      const raw = params.get("onboard");
+      if (raw === null) return false;
+      const token = raw.trim().toLowerCase();
+      return token !== "0" && token !== "false" && token !== "off";
+    })(),
     reduced,
   };
 }

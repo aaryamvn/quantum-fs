@@ -24,6 +24,10 @@ export interface AvatarProps {
  * identity and the disc is just the app talking. The ring is a constant
  * violet-tinted hairline so the circle stays crisp on surface, glass and page
  * alike, and the dot only marks presence — it never carries meaning on its own.
+ *
+ * `dim` swaps the fill rather than lowering the alpha. A translucent disc let
+ * whatever sat behind it through — in a stack, the avatar underneath — so an
+ * offline face is a second, fully opaque palette: dark, desaturated, quiet.
  */
 export function Avatar({
   name,
@@ -42,14 +46,14 @@ export function Avatar({
       role="img"
       aria-label={name}
       title={title}
-      className={`avatar-face relative inline-flex shrink-0 items-center justify-center rounded-full ${className}`}
+      className={`${dim ? "avatar-face-muted" : "avatar-face"} relative inline-flex shrink-0 items-center justify-center rounded-full ${className}`}
       style={{
         width: size,
         height: size,
         // Inset, so the hairline lands inside the disc and never fattens it.
-        boxShadow: "0 0 0 1px var(--color-avatar-ring) inset",
-        opacity: dim ? 0.45 : 1,
-        filter: dim ? "grayscale(0.4)" : undefined,
+        boxShadow: `0 0 0 1px var(${
+          dim ? "--color-avatar-muted-ring" : "--color-avatar-ring"
+        }) inset`,
       }}
     >
       {/*
@@ -66,7 +70,7 @@ export function Avatar({
           fontSize: Math.round(size * 0.4),
           lineHeight: 1,
           letterSpacing: "0.01em",
-          color: "#F5F5F7",
+          color: dim ? "var(--color-avatar-muted-fg)" : "#F5F5F7",
           transform: "translateY(0.5px)",
         }}
       >
