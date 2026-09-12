@@ -36,25 +36,9 @@ export function normalizeAddress(raw: string): string {
   return `${value.slice(0, slash)}/${value.slice(slash + 1).toUpperCase()}`;
 }
 
-/**
- * The connect string a vault server prints, `IP:PORT/TOKEN`
- * (docs/decisions/client-backend-embed.md), or its address half alone.
- *
- * The token is what authenticates the app to the host's admin port, so it is
- * part of the address as far as this field is concerned: one paste, one control,
- * no second box for a secret that arrived on the same line.
- */
-export function isValidAddress(raw: string): boolean {
-  const value = raw.trim();
-  if (!value) return false;
-
-  const slash = value.indexOf("/");
-  const authority = slash === -1 ? value : value.slice(0, slash);
-  if (slash !== -1) {
-    const token = value.slice(slash + 1);
-    if (!TOKEN.test(token)) return false;
-  }
-
+/** The address half, `IP:PORT` — the part of a connect string before the slash. */
+function isValidAuthority(authority: string): boolean {
+  if (!authority) return false;
   // An IPv6 literal is bracketed precisely so its own colons cannot be read as
   // the port separator, so the split happens after the closing bracket.
   const close = authority.lastIndexOf("]");
@@ -67,6 +51,41 @@ export function isValidAddress(raw: string): boolean {
     if (n < 1 || n > 65535) return false;
   }
   return IPV4.test(host) || IPV6.test(host) || HOSTNAME.test(host);
+}
+
+/**
+ * The connect string a vault server prints, `IP:PORT/TOKEN`
+ * (docs/decisions/client-backend-embed.md), in full.
+ *
+ * The token is what authenticates the app to the host's admin port, so it is
+ * part of the address as far as this field is concerned: one paste, one control,
+ * no second box for a secret that arrived on the same line.
+ *
+ * It is required, not optional. An address alone does add a server, and the
+ * daemon even reports it online — but every vault it is asked to create fails,
+ * because creating one is an admin-port call. A server that appears and then
+ * refuses the only thing you can do with it is worse than a field that says
+ * up front that half the string is missing.
+ */
+export function isValidAddress(raw: string): boolean {
+  const value = raw.trim();
+  if (!value) return false;
+
+  const slash = value.indexOf("/");
+  if (slash === -1) return false;
+  if (!TOKEN.test(value.slice(slash + 1))) return false;
+  return isValidAuthority(value.slice(0, slash));
+}
+
+/**
+ * A well-formed address with the key left off — the one near-miss worth a
+ * sentence, because it is what a person types when they read the connect string
+ * as "the server's address" and stopped at the slash.
+ */
+export function isMissingToken(raw: string): boolean {
+  const value = raw.trim();
+  if (!value || value.includes("/")) return false;
+  return isValidAuthority(value);
 }
 
 /** Fades the form out and the confirmation in without the panel resizing abruptly. */
@@ -111,6 +130,7 @@ export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): 
   // so a lower-case token can never be rejected by a field that looks enabled.
   const value = normalizeAddress(address);
   const valid = isValidAddress(value);
+  const missingToken = !valid && isMissingToken(value);
 
   const submit = async () => {
     if (!valid || busy || added) return;
@@ -158,8 +178,15 @@ export function SetupServerModal({ open, onClose }: { open: boolean; onClose(): 
               aria-label="Server connect string"
               aria-invalid={error !== null}
             />
+            {/* The missing key is a hint, not an error: nothing has failed yet,
+                and colouring an unfinished paste red would blame the user for
+                still typing. The daemon's own failures keep the coral. */}
             {error ? (
               <p className="mt-[8px] text-[13px] leading-[18px] text-coral">{error}</p>
+            ) : missingToken ? (
+              <p className="mt-[8px] text-[13px] leading-[18px] text-fg-3">
+                Include the key after the slash from the server&rsquo;s connect string
+              </p>
             ) : null}
             <div className="mt-[16px]">
               <PrimaryButton onClick={() => void submit()} disabled={!valid || busy}>

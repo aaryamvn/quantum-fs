@@ -109,6 +109,11 @@ impl AdminStatus {
     }
 }
 
+/// What `AUTH` answering `ERR unauthorized` becomes. The sentence is user-facing; the root loop
+/// also matches on it to throw the dead token away instead of re-sending it every second (each
+/// rejected `AUTH` prints an ATTENTION line on the host's console).
+pub const UNAUTHORIZED: &str = "That server rejected the connect string";
+
 /// One admin connection, authenticated when the target carried a token.
 pub struct AdminConn {
     lines: BufReader<TcpStream>,
@@ -137,9 +142,7 @@ impl AdminConn {
                 conn.authed = true;
                 Ok(conn)
             }
-            Err(message) if message.contains("unauthorized") => {
-                Err("That server rejected the connect string".to_string())
-            }
+            Err(message) if message.contains("unauthorized") => Err(UNAUTHORIZED.to_string()),
             Err(message) => Err(message),
         }
     }

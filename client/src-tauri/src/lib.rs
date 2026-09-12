@@ -37,11 +37,10 @@ pub fn run() {
             // handle only exists once the app is assembled. Every `backend://` event the webview
             // listens to comes out of this one callback.
             let handle = app.handle().clone();
-            let emit: Arc<dyn Fn(&str, serde_json::Value) + Send + Sync> =
-                Arc::new(move |name: &str, payload: serde_json::Value| {
-                    // A failed emit means the window is gone; the next mount re-reads state anyway.
-                    let _ = handle.emit(name, payload);
-                });
+            let emit: node::Emit = Arc::new(move |name: &str, payload: serde_json::Value| {
+                // A failed emit means the window is gone; the next mount re-reads state anyway.
+                let _ = handle.emit(name, payload);
+            });
             app.manage(node::Node::start(data_dir(app)?, emit));
             Ok(())
         })
@@ -81,6 +80,16 @@ pub fn run() {
             fs_commands::publish_presence,
             fs_commands::ask_agent
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running QuantamFS");
+        .build(tauri::generate_context!())
+        .expect("error while running QuantamFS")
+        // The node runs on its own thread with its own Tokio runtime, so nothing stops it when
+        // the window closes: without this the vault tasks are killed mid-write and the demo log
+        // loses whatever is still buffered. `Exit` is the last event before the process ends.
+        .run(|handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(node) = handle.try_state::<node::Node>() {
+                    node.shutdown();
+                }
+            }
+        });
 }

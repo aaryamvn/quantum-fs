@@ -229,6 +229,7 @@ export function HomeScreen({ revealed, onOpenVault }: Props) {
                   <ServerHeading
                     name={server.name}
                     address={server.address}
+                    online={server.online}
                     onAdd={() => setVaultTarget(server)}
                   />
                   <Card>

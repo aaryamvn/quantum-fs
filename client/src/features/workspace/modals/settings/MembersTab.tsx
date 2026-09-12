@@ -17,6 +17,9 @@ import { useSettingsVault } from "./SettingsVaultContext";
 /** An armed remove disarms itself, so a dialog left open is never one click from a removal. */
 const CONFIRM_MS = 4000;
 
+/** The name the daemon gives the host's own member record. */
+const SERVER_NAME = "Vault server";
+
 const ROLE_OPTIONS: { value: MemberRole; label: string }[] = [
   { value: "admin", label: "Admin" },
   { value: "member", label: "Member" },
@@ -184,7 +187,20 @@ function MemberRow({
         transition: { duration: 0.14, ease: EASE },
       };
 
-  const second = online ? "Online" : `Offline · last seen ${formatRelative(member.lastSeenAt)}`;
+  const presence = online ? "Online" : `Offline · last seen ${formatRelative(member.lastSeenAt)}`;
+  // The host's own record is a machine, not a person, and the list is the one
+  // place that reads as a roster of people — so it says which row it is.
+  const second = member.name === SERVER_NAME ? `Server · ${presence}` : presence;
+
+  /*
+    Admins are the two rows nothing here can act on: the vault server holds the
+    data and the creator is the vault's root of trust, and the daemon refuses
+    both a demotion and a removal for them. A control that is offered and then
+    answers with an error is worse than one that was never offered, so the row
+    stays legible and inert rather than pretending.
+  */
+  const locked = member.role === "admin";
+  const actionable = canManage && !locked;
 
   return (
     <div
@@ -235,9 +251,9 @@ function MemberRow({
               disabled prop, and this takes its radios out of the tab order too.
             */}
             <fieldset
-              disabled={!canManage || busy}
+              disabled={!actionable || busy}
               aria-label={`Role for ${member.name}`}
-              className={`m-0 shrink-0 border-0 p-0 ${canManage ? "" : "opacity-50"}`}
+              className={`m-0 shrink-0 border-0 p-0 ${actionable ? "" : "opacity-50"}`}
             >
               <Segmented
                 value={member.role}
@@ -247,16 +263,23 @@ function MemberRow({
             </fieldset>
 
             {/* No tooltip: a hover label on a destructive control is noise in front
-                of a button that already says what it does once it is pressed. */}
-            <IconButton
-              icon={<Trash2 size={16} strokeWidth={1.75} aria-hidden />}
-              label={`Remove ${member.name}`}
-              tooltip={false}
-              tone="danger"
-              size={28}
-              disabled={!canManage || member.isSelf || busy}
-              onClick={() => setConfirming(true)}
-            />
+                of a button that already says what it does once it is pressed.
+                An admin gets the slot but not the button — a greyed-out bin still
+                reads as an offer, and the space has to stay so every row's
+                role control lands on the same edge. */}
+            {locked ? (
+              <span aria-hidden className="block h-[28px] w-[28px] shrink-0" />
+            ) : (
+              <IconButton
+                icon={<Trash2 size={16} strokeWidth={1.75} aria-hidden />}
+                label={`Remove ${member.name}`}
+                tooltip={false}
+                tone="danger"
+                size={28}
+                disabled={!canManage || member.isSelf || busy}
+                onClick={() => setConfirming(true)}
+              />
+            )}
           </motion.div>
         )}
       </AnimatePresence>

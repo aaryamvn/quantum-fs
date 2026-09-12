@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -49,7 +48,7 @@ use super::names::{
     vault_path,
 };
 use super::state::{self, VaultRecord};
-use super::{Reply, Req};
+use super::{Emit, Reply, Req};
 
 /// A new remote file up to this size is fetched in the background so the first click is instant.
 pub const PREFETCH_MAX_BYTES: u64 = 16 * 1024 * 1024;
@@ -80,6 +79,12 @@ const SAVE_INTERVAL: Duration = Duration::from_millis(500);
 /// name after this long stays anonymous.
 const BACKFILL_INTERVAL: Duration = Duration::from_secs(2);
 const BACKFILL_GIVE_UP_MS: u64 = 30_000;
+/// Staged copies are re-stat'ed round-robin, this many per tick: watching what the OS holds
+/// open must never turn a 100 ms heartbeat into a directory scan.
+const WATCH_PER_TICK: usize = 8;
+/// An edited file has to stop moving for this long before it is read back. An app that saves
+/// in several steps would otherwise be sent to the vault half-written.
+const WRITE_BACK_SETTLE: Duration = Duration::from_secs(1);
 
 /// How one reconnect attempt ended. Only `Refused` is an answer the host authenticated;
 /// `Failed` covers everything a restarting server also looks like.
@@ -193,6 +198,9 @@ struct Shape {
     version: u64,
 }
 
+/// One change a projection classified: node id, kind, from, to, and the line the UI shows.
+type Classified = (String, HistoryKind, Option<String>, Option<String>, String);
+
 /// Timestamps the protocol does not carry; first sight counts as creation. Persisted in
 /// `nodes.json`, so a restart does not reset every date to "now".
 use super::state::NodeRecord as Rec;
@@ -200,9 +208,31 @@ use super::state::NodeRecord as Rec;
 /// One file being fetched, advanced a batch per heartbeat so the loop stays responsive.
 struct Download {
     node_id: String,
-    chunk_ids: Vec<ChunkId>,
+    /// Only the chunks the local store was missing when the transfer started, in manifest
+    /// order: asking the host for bytes we already hold is a round-trip for nothing.
+    missing: Vec<ChunkId>,
     trusted: TrustedManifest,
+    /// How many of `missing` are in.
     fetched: usize,
+    /// What the store already had, and the file's whole chunk count. Progress is
+    /// `(present + fetched) / total`, so a half-cached file does not restart at 0 %.
+    present: usize,
+    total: usize,
+}
+
+/// One staged copy `open_node` handed to the OS, watched so an edit made in a native app
+/// comes back into the vault. In memory only: opening the file again re-creates the entry.
+struct OpenFile {
+    node_id: String,
+    /// The assembled copy under `open/<node_id>/`.
+    path: PathBuf,
+    /// The size and mtime we have already accounted for -- as we wrote them, or as we last
+    /// read them back. Keeping these current is what stops our own reassembly of a file
+    /// from being read as somebody's edit on the next tick.
+    len: u64,
+    mtime: u64,
+    /// When the current run of changes was last seen; `None` = the copy matches the vault.
+    changed_at: Option<Instant>,
 }
 
 /// One projected node plus the bookkeeping the UI shape does not carry.
@@ -222,7 +252,7 @@ pub struct VaultNode {
     root_id: String,
     record: VaultRecord,
     profile: state::Profile,
-    emit: Arc<dyn Fn(&str, Value) + Send + Sync>,
+    emit: Emit,
     root_tx: UnboundedSender<Req>,
     keys: KeyStore,
     self_peer: PeerId,
@@ -281,6 +311,14 @@ pub struct VaultNode {
     own_presence: Option<PresenceInput>,
     /// The first projection after the replica opens is a rehydration, not a set of new nodes.
     hydrated: bool,
+    /// Set when the replica opens and on every successful join: the next projection publishes
+    /// every node as an upsert, even one whose shape did not move. A workspace that asked for
+    /// the tree while this task was still joining has nothing on screen otherwise, and a diff
+    /// against an identical map would never put anything there.
+    full_projection: bool,
+    /// Staged copies handed to the OS, and the cursor that walks a few of them per tick.
+    open_files: Vec<OpenFile>,
+    open_cursor: usize,
     history_dirty: bool,
     records_dirty: bool,
     cache_dirty: bool,
@@ -298,7 +336,7 @@ pub fn spawn(
     data_dir: PathBuf,
     record: VaultRecord,
     profile: state::Profile,
-    emit: Arc<dyn Fn(&str, Value) + Send + Sync>,
+    emit: Emit,
     root_tx: UnboundedSender<Req>,
     admin: Option<AdminTarget>,
     initial_meta: Option<(String, String)>,
@@ -363,6 +401,9 @@ pub fn spawn(
         known_members: BTreeSet::new(),
         own_presence: None,
         hydrated: false,
+        full_projection: false,
+        open_files: Vec::new(),
+        open_cursor: 0,
         history_dirty: false,
         records_dirty: false,
         cache_dirty: false,
@@ -414,8 +455,8 @@ impl VaultNode {
     async fn handle(&mut self, req: VaultReq) {
         match req {
             VaultReq::ListTree(reply) => {
-                let tree = self.tree_list();
-                let _ = reply.send(Ok(tree));
+                let result = self.tree_list();
+                let _ = reply.send(result);
             }
             VaultReq::NodeSnapshot(id, reply) => {
                 let found = self
@@ -534,6 +575,7 @@ impl VaultNode {
             self.sync_sidecar().await;
         }
         self.advance_download().await;
+        self.watch_open_files().await;
         self.project();
         self.watch_members();
         self.backfill().await;
@@ -610,6 +652,10 @@ impl VaultNode {
         self.next_connect = Instant::now() + self.backoff;
         match outcome {
             Attempt::Joined => {
+                // A reconnect re-opens the live stream over a replica that was already here,
+                // so the next projection republishes the whole tree rather than diffing
+                // against whatever the webview was left holding while we were away.
+                self.full_projection = true;
                 self.backoff = RECONNECT_BACKOFF;
                 self.next_connect = Instant::now() + RECONNECT_BACKOFF;
                 self.handshake_failures = 0;
@@ -617,6 +663,14 @@ impl VaultNode {
                 self.last_refusal = None;
                 self.was_member = true;
                 self.last_note.clear();
+                // The seam `node/mod.rs` documents on `Req::VaultJoined`: `create_vault` and
+                // `join_vault` block on this rather than on a directory lookup, because only
+                // the host decides whether this peer is in. Sent on every successful join,
+                // not just the first: the root loop's flag is idempotent and a reconnect
+                // after a revocation scare is exactly when it wants to hear it again.
+                let _ = self.root_tx.send(Req::VaultJoined {
+                    vault_id: self.vault_hex.clone(),
+                });
             }
             // A refusal is the one answer the host authenticated, but `admit` gives a denied
             // peer, a stale code and a wrong vault id the same `AuthenticationFailed`
@@ -679,7 +733,13 @@ impl VaultNode {
                 ad.peer_id,
                 members,
             ) {
-                Ok(replica) => self.replica = Some(Rc::new(RefCell::new(replica))),
+                Ok(replica) => {
+                    // The first projection that has a tree in it must reach the webview
+                    // whole: a workspace opened while this task was still joining is sitting
+                    // on an empty canvas, and no diff would ever fill it in.
+                    self.replica = Some(Rc::new(RefCell::new(replica)));
+                    self.full_projection = true;
+                }
                 Err(error) => {
                     self.note_failure(&error);
                     return Attempt::Failed;
@@ -826,12 +886,15 @@ impl VaultNode {
         let mut next = self.sidecar.clone();
         let mut dirty = false;
         let opening = self.initial_meta.clone();
-        if let Some((name, creator)) = opening {
+        if let Some((name, _canonical)) = opening {
             if next.created_at == 0 {
                 next.v = 1;
                 next.name = name;
                 next.created_at = now_ms();
-                next.created_by = creator;
+                // The real per-vault peer, never the canonical `me_` id the root loop hands
+                // down: `.qfs-meta.json` is replicated, and `me_...` names nothing on the
+                // other side of the vault. It is mapped back on the way out to the UI.
+                next.created_by = hex(&self.self_peer.0);
                 dirty = true;
             } else {
                 self.initial_meta = None;
@@ -1011,11 +1074,8 @@ impl VaultNode {
         if trusted.manifest().version == self.sidecar_version {
             return;
         }
-        if !self.is_local(&trusted) {
-            let ids = trusted.manifest().chunk_ids.clone();
-            if self.pull_batches(&ids, &trusted).await.is_err() {
-                return;
-            }
+        if !self.is_local(&trusted) && self.pull_batches(&trusted).await.is_err() {
+            return;
         }
         let Some(bytes) = self.assemble(&file_id) else {
             return;
@@ -1077,8 +1137,7 @@ impl VaultNode {
 
         // 1. classify what changed, so history and timestamps agree with the diff.
         let mut shapes: HashMap<String, Shape> = HashMap::new();
-        let mut events: Vec<(String, HistoryKind, Option<String>, Option<String>, String)> =
-            Vec::new();
+        let mut events: Vec<Classified> = Vec::new();
         let mut touched: HashSet<String> = HashSet::new();
         for item in &raw {
             let shape = Shape {
@@ -1422,10 +1481,13 @@ impl VaultNode {
         }
         if let Some(active) = &self.active {
             if active.node_id == item.id {
-                let total = active.chunk_ids.len().max(1) as f64;
+                // present/total, never fetched/missing: a file the store was already half
+                // holding must not show a progress bar that restarts from zero.
+                let total = active.total.max(1) as f64;
+                let done = (active.present + active.fetched) as f64;
                 return (
                     Availability::Downloading,
-                    Some((active.fetched as f64 / total).clamp(0.0, 1.0)),
+                    Some((done / total).clamp(0.0, 1.0)),
                 );
             }
         }
@@ -1459,16 +1521,41 @@ impl VaultNode {
             .all(|chunk| store.has(chunk))
     }
 
+    /// The chunks of one manifest the local store does not hold, in manifest order. The host
+    /// is only ever asked for these: re-pulling bytes that are already here is the difference
+    /// between resuming a transfer and restarting it. A store we cannot read answers "all of
+    /// them", which is the safe direction -- the pull re-verifies every chunk anyway.
+    fn missing_chunks(&self, trusted: &TrustedManifest) -> Vec<ChunkId> {
+        let all = &trusted.manifest().chunk_ids;
+        let Some(replica) = self.replica.as_ref() else {
+            return all.clone();
+        };
+        let store = replica.borrow().chunks();
+        let Ok(store) = store.lock() else {
+            return all.clone();
+        };
+        all.iter()
+            .filter(|chunk| !store.has(chunk))
+            .copied()
+            .collect()
+    }
+
     /// Whole-node upserts for anything that changed, removes for anything gone: exactly the
     /// delta contract `client/src/lib/backend/client.ts` documents.
     fn emit_diff(&mut self, entries: BTreeMap<String, Entry>, order: Vec<String>, actor: &str) {
+        // One projection after the replica opens (and one after every reconnect) goes out
+        // whole -- every node, the root included -- even where nothing moved. Callers were
+        // answered with an error until now, so there is no baseline on the other side to
+        // diff against.
+        let full = self.full_projection && self.replica.is_some();
         let mut changes = Vec::new();
         for id in &order {
             let Some(entry) = entries.get(id) else { continue };
-            let changed = match self.entries.get(id) {
-                Some(old) => !same_node(&old.node, &entry.node),
-                None => true,
-            };
+            let changed = full
+                || match self.entries.get(id) {
+                    Some(old) => !same_node(&old.node, &entry.node),
+                    None => true,
+                };
             if changed {
                 changes.push(FsChange::Upsert {
                     node: entry.node.clone(),
@@ -1487,6 +1574,9 @@ impl VaultNode {
         if changes.is_empty() {
             return;
         }
+        if full {
+            self.full_projection = false;
+        }
         self.emit(
             "backend://fs-changed",
             &FsChangedPayload {
@@ -1497,11 +1587,18 @@ impl VaultNode {
         );
     }
 
-    fn tree_list(&self) -> Vec<FsNode> {
-        self.order
+    /// The tree, or the reason there is not one yet. An empty `Ok` is indistinguishable from
+    /// an empty vault and the workspace draws that as a finished, empty canvas -- so a node
+    /// whose replica is not open yet says so, and the UI keeps its loading state instead.
+    fn tree_list(&self) -> Result<Vec<FsNode>, String> {
+        if self.replica.is_none() {
+            return Err("Still connecting to the vault…".to_string());
+        }
+        Ok(self
+            .order
             .iter()
             .filter_map(|id| self.entries.get(id).map(|entry| entry.node.clone()))
-            .collect()
+            .collect())
     }
 
     /* ------------------------------------------------------------ history */
@@ -1901,7 +1998,7 @@ impl VaultNode {
             return Ok(NodeAccess {
                 node_id: node_id.to_string(),
                 inherit: false,
-                entries: entries.clone(),
+                entries: self.presented_access(entries),
             });
         }
         let mut cursor = self
@@ -1913,7 +2010,7 @@ impl VaultNode {
                 return Ok(NodeAccess {
                     node_id: node_id.to_string(),
                     inherit: true,
-                    entries: entries.clone(),
+                    entries: self.presented_access(entries),
                 });
             }
             cursor = self
@@ -1935,15 +2032,18 @@ impl VaultNode {
             next.access.remove(&input.node_id);
             "reset access to inherited".to_string()
         } else {
-            // The creator is an editor by construction and can never be removed.
+            // The creator is an editor by construction and can never be removed. What goes
+            // in is always a real peer hex: this list is replicated, so a canonical `me_...`
+            // from the webview is resolved to this vault's own peer on the way in.
             let creator = self.sidecar.created_by.clone();
             let mut seen: HashSet<String> = HashSet::new();
             let mut entries: Vec<AccessEntry> = Vec::new();
             for entry in input.entries {
-                if entry.peer_id == creator || !seen.insert(entry.peer_id.clone()) {
+                let peer_id = self.stored(&entry.peer_id);
+                if peer_id == creator || !seen.insert(peer_id.clone()) {
                     continue;
                 }
-                entries.push(entry);
+                entries.push(AccessEntry { peer_id, ..entry });
             }
             let count = entries.len();
             next.access.insert(input.node_id.clone(), entries);
@@ -2025,7 +2125,7 @@ impl VaultNode {
         let node_id = active.node_id.clone();
         let trusted = active.trusted.clone();
         let batch: Vec<ChunkId> = active
-            .chunk_ids
+            .missing
             .iter()
             .skip(active.fetched)
             .take(PULL_BATCH)
@@ -2040,7 +2140,7 @@ impl VaultNode {
             Ok(()) => {
                 if let Some(active) = self.active.as_mut() {
                     active.fetched += batch.len();
-                    if active.fetched >= active.chunk_ids.len() {
+                    if active.fetched >= active.missing.len() {
                         self.finish_download(&node_id);
                     }
                 }
@@ -2072,14 +2172,21 @@ impl VaultNode {
             };
             let trusted = { replica.borrow().trusted_manifest(&file_id).cloned() };
             let Some(trusted) = trusted else { continue };
-            if self.is_local(&trusted) {
+            // Nothing missing is nothing to do; and what is missing is all the host is asked
+            // for, so a transfer that died half-way resumes instead of starting over.
+            let missing = self.missing_chunks(&trusted);
+            if missing.is_empty() {
                 continue;
             }
+            let total = trusted.manifest().chunk_ids.len();
+            let present = total.saturating_sub(missing.len());
             self.active = Some(Download {
                 node_id,
-                chunk_ids: trusted.manifest().chunk_ids.clone(),
+                missing,
                 trusted,
                 fetched: 0,
+                present,
+                total,
             });
             return;
         }
@@ -2115,8 +2222,7 @@ impl VaultNode {
                 .ok_or("That file has no contents yet")?
         };
         if !self.is_local(&trusted) {
-            let ids = trusted.manifest().chunk_ids.clone();
-            self.pull_batches(&ids, &trusted).await?;
+            self.pull_batches(&trusted).await?;
         }
         let replica = self
             .replica
@@ -2137,30 +2243,32 @@ impl VaultNode {
         Ok(bodies)
     }
 
-    /// Pull to completion, emitting per-batch progress. Used when the caller must wait —
-    /// `open_node`, a duplicate, a sidecar refresh. The transfer is published as the active
-    /// download for the length of the pull, so the projection says `downloading` with real
-    /// progress instead of `remote`; any background transfer is put back afterwards.
-    async fn pull_batches(
-        &mut self,
-        chunk_ids: &[ChunkId],
-        trusted: &TrustedManifest,
-    ) -> Result<(), String> {
-        let batches: Vec<Vec<ChunkId>> = chunk_ids
-            .chunks(PULL_BATCH)
-            .map(|batch| batch.to_vec())
-            .collect();
+    /// Pull whatever is missing to completion, emitting per-batch progress. Used when the
+    /// caller must wait — `open_node`, a duplicate, a sidecar refresh. The transfer is
+    /// published as the active download for the length of the pull, so the projection says
+    /// `downloading` with real progress instead of `remote`; any background transfer is put
+    /// back afterwards. Only the chunks the store lacks are requested, and progress counts
+    /// the ones that were already here, so a resumed file starts where it left off.
+    async fn pull_batches(&mut self, trusted: &TrustedManifest) -> Result<(), String> {
+        let total = trusted.manifest().chunk_ids.len();
+        let missing = self.missing_chunks(trusted);
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let present = total.saturating_sub(missing.len());
         let background = self.active.take();
         self.active = Some(Download {
             node_id: hex(&trusted.manifest().file_id.0),
-            chunk_ids: chunk_ids.to_vec(),
+            missing: missing.clone(),
             trusted: trusted.clone(),
             fetched: 0,
+            present,
+            total,
         });
         let mut fetched = 0usize;
         let mut outcome = Ok(());
-        for batch in batches {
-            if let Err(error) = self.pull_one(&batch, trusted).await {
+        for batch in missing.chunks(PULL_BATCH) {
+            if let Err(error) = self.pull_one(batch, trusted).await {
                 outcome = Err(error);
                 break;
             }
@@ -2224,7 +2332,8 @@ impl VaultNode {
         let target = dir.join(&name);
         // Concatenating and writing a multi-gigabyte file on the runtime thread would freeze
         // every vault that shares it, so the whole staging step goes to the blocking pool.
-        let path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+        type Staged = (PathBuf, u64, u64);
+        let (path, len, mtime) = tokio::task::spawn_blocking(move || -> Result<Staged, String> {
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("Could not assemble the file: {e}"))?;
             let index = dir.join("version.json");
@@ -2242,10 +2351,17 @@ impl VaultNode {
                     .map_err(|e| format!("Could not assemble the file: {e}"))?;
                 let _ = std::fs::write(&index, serde_json::to_vec(&version).unwrap_or_default());
             }
-            Ok(target)
+            // The size and mtime of the copy as we are leaving it. The watcher compares
+            // against these, so our own reassembly is never read back as someone's edit.
+            let meta = std::fs::metadata(&target)
+                .map_err(|e| format!("Could not assemble the file: {e}"))?;
+            let facts = (meta.len(), mtime_ms(&meta));
+            Ok((target, facts.0, facts.1))
         })
         .await
         .map_err(|_| "Could not assemble the file".to_string())??;
+        // From here the OS owns that copy. Whatever it writes to it comes back to the vault.
+        self.register_open(node_id, path.clone(), len, mtime);
         #[cfg(target_os = "macos")]
         std::process::Command::new("open")
             .arg(&path)
@@ -2260,6 +2376,143 @@ impl VaultNode {
                 node_id: node_id.to_string(),
             });
             Ok(())
+        }
+    }
+
+    /// Remember (or refresh) one staged copy, so an edit a native app makes to it comes back.
+    fn register_open(&mut self, node_id: &str, path: PathBuf, len: u64, mtime: u64) {
+        match self
+            .open_files
+            .iter_mut()
+            .find(|watched| watched.node_id == node_id)
+        {
+            Some(watched) => {
+                watched.path = path;
+                watched.len = len;
+                watched.mtime = mtime;
+                watched.changed_at = None;
+            }
+            None => self.open_files.push(OpenFile {
+                node_id: node_id.to_string(),
+                path,
+                len,
+                mtime,
+                changed_at: None,
+            }),
+        }
+    }
+
+    /// A few staged copies per tick, round-robin: one whose size or mtime moved is noted, and
+    /// one that has then held still for `WRITE_BACK_SETTLE` is read back into the vault.
+    /// `metadata` is one stat, which is what makes this affordable at 100 ms; at most one
+    /// file is written back per tick so a save can never stall the heartbeat behind it.
+    async fn watch_open_files(&mut self) {
+        if self.conn.is_none() || self.open_files.is_empty() {
+            return;
+        }
+        let rounds = self.open_files.len().min(WATCH_PER_TICK);
+        let mut ready: Option<usize> = None;
+        for _ in 0..rounds {
+            let index = self.open_cursor % self.open_files.len();
+            self.open_cursor = self.open_cursor.wrapping_add(1);
+            let Ok(meta) = std::fs::metadata(&self.open_files[index].path) else {
+                // Mid-save an app may have the path unlinked; the next tick sees it again.
+                continue;
+            };
+            let facts = (meta.len(), mtime_ms(&meta));
+            let watched = &mut self.open_files[index];
+            if facts.0 != watched.len || facts.1 != watched.mtime {
+                watched.len = facts.0;
+                watched.mtime = facts.1;
+                watched.changed_at = Some(Instant::now());
+                continue;
+            }
+            if watched
+                .changed_at
+                .is_some_and(|at| at.elapsed() >= WRITE_BACK_SETTLE)
+            {
+                ready = Some(index);
+                break;
+            }
+        }
+        if let Some(index) = ready {
+            self.write_back(index).await;
+        }
+    }
+
+    /// Read one settled staged copy and save it back over the vault's own path. The registry
+    /// takes the size and mtime we actually read, and `version.json` the manifest the host
+    /// answered with, so neither this write nor the reassembly it implies is mistaken for
+    /// the next edit. `settle` is what turns the new manifest into the `fs-changed` the UI
+    /// sees, and into the one `modified` history entry this write earns.
+    async fn write_back(&mut self, index: usize) {
+        let Some(watched) = self.open_files.get(index) else {
+            return;
+        };
+        let node_id = watched.node_id.clone();
+        let source = watched.path.clone();
+        let Some(destination) = self.entries.get(&node_id).map(|entry| entry.path.clone()) else {
+            // The node is gone from the vault; there is nothing left to write back to.
+            self.open_files.remove(index);
+            return;
+        };
+        type Edited = (Vec<Vec<u8>>, u64, u64);
+        // Reading and re-chunking a large file on the runtime thread would freeze every vault
+        // that shares it, exactly as an import would.
+        let read = tokio::task::spawn_blocking(move || -> Result<Edited, String> {
+            let bytes = std::fs::read(&source).map_err(|e| e.to_string())?;
+            let meta = std::fs::metadata(&source).map_err(|e| e.to_string())?;
+            let bodies: Vec<Vec<u8>> = bytes
+                .chunks(IMPORT_CHUNK_BYTES)
+                .map(|chunk| chunk.to_vec())
+                .collect();
+            Ok((bodies, meta.len(), mtime_ms(&meta)))
+        })
+        .await;
+        let Ok(Ok((bodies, len, mtime))) = read else {
+            // Unreadable this time round; the entry stays armed and the next tick retries.
+            return;
+        };
+        let saved = match self.live() {
+            Ok(conn) => conn.save_file(&destination, &bodies).await,
+            Err(_) => return,
+        };
+        let file_id = match saved {
+            Ok(file_id) => file_id,
+            Err(error) => {
+                self.note_failure(&error);
+                return;
+            }
+        };
+        let id = hex(&file_id.0);
+        if let Some(watched) = self.open_files.get_mut(index) {
+            watched.node_id = id.clone();
+            watched.len = len;
+            watched.mtime = mtime;
+            watched.changed_at = None;
+        }
+        self.mine.insert(id.clone());
+        self.settle().await;
+        // The staged copy already holds the newest bytes: record the manifest version it
+        // matches now, or the next `open_node` would call it stale, rewrite it, and the
+        // mtime that rewrite moves would come straight back here as another edit.
+        let version = self
+            .entries
+            .get(&id)
+            .map(|entry| entry.file_id)
+            .and_then(|file_id| {
+                self.replica.as_ref().and_then(|replica| {
+                    replica
+                        .borrow()
+                        .trusted_manifest(&file_id)
+                        .map(|trusted| trusted.manifest().version)
+                })
+            });
+        if let Some(version) = version {
+            let index_path = state::open_dir(&self.data_dir, &self.vault_hex)
+                .join(&id)
+                .join("version.json");
+            let _ = std::fs::write(index_path, serde_json::to_vec(&version).unwrap_or_default());
         }
     }
 
@@ -2398,7 +2651,9 @@ impl VaultNode {
                 } else {
                     peer_hex.clone()
                 };
-                let role = if is_host || self.sidecar.created_by == presented {
+                // `created_by` is a real peer hex inside the replicated sidecar, so it is
+                // compared against the peer hex -- never against the id we present upwards.
+                let role = if is_host || self.sidecar.created_by == peer_hex {
                     MemberRole::Admin
                 } else {
                     MemberRole::Member
@@ -2409,7 +2664,11 @@ impl VaultNode {
                     initials: initials(&name),
                     color,
                     role,
-                    online: is_self || is_host || status.is_some_and(|m| m.online),
+                    // The host is not online by definition: it is online when the newest
+                    // STATUS says so, or while this node is holding a live session to it.
+                    online: is_self
+                        || status.is_some_and(|m| m.online)
+                        || (is_host && self.conn.is_some()),
                     last_seen_at: status.map(|m| m.last_seen_at).unwrap_or_else(now_ms),
                     last_edited: self.last_edited(&presented),
                     queued_ops: status.map(|m| m.queued_ops).unwrap_or(0),
@@ -2493,7 +2752,7 @@ impl VaultNode {
             self.snapshot.created_ms
         };
         let created_by = if !self.sidecar.created_by.is_empty() {
-            self.sidecar.created_by.clone()
+            self.present_hex(&self.sidecar.created_by)
         } else {
             self.snapshot
                 .creator
@@ -2727,6 +2986,29 @@ impl VaultNode {
         }
     }
 
+    /// The inverse of `present`, for anything that goes into replicated data: our own
+    /// canonical `me_...` stands for this vault's peer, and every other id the webview hands
+    /// us is already a peer hex and is stored exactly as it arrived.
+    fn stored(&self, peer_id: &str) -> String {
+        if peer_id == self.profile.peer_id {
+            hex(&self.self_peer.0)
+        } else {
+            peer_id.to_string()
+        }
+    }
+
+    /// Access entries as the webview names peers: our own per-vault identity becomes the one
+    /// canonical profile id, everyone else keeps the peer hex the sidecar stores.
+    fn presented_access(&self, entries: &[AccessEntry]) -> Vec<AccessEntry> {
+        entries
+            .iter()
+            .map(|entry| AccessEntry {
+                peer_id: self.present_hex(&entry.peer_id),
+                level: entry.level,
+            })
+            .collect()
+    }
+
     /* ------------------------------------------------------------- events */
 
     fn emit<T: Serialize>(&self, name: &str, payload: &T) {
@@ -2776,6 +3058,16 @@ struct Raw {
     size: u64,
     writer: Option<PeerId>,
     path: String,
+}
+
+/// Milliseconds since the epoch, or 0 for a filesystem that will not say. Paired with the
+/// length it is enough to notice that something outside this app rewrote a staged copy.
+fn mtime_ms(meta: &std::fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn child_path(parent: &str, name: &str) -> String {

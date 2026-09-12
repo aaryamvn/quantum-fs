@@ -321,7 +321,7 @@ pub fn save_servers(data_dir: &Path, servers: &[ServerRecord]) {
 
 pub fn load_recents(data_dir: &Path) -> Vec<RecentRecord> {
     let mut recents = read_json::<Vec<RecentRecord>>(&recents_path(data_dir)).unwrap_or_default();
-    recents.sort_by(|a, b| b.at.cmp(&a.at));
+    recents.sort_by_key(|record| std::cmp::Reverse(record.at));
     recents.truncate(MAX_RECENTS);
     recents
 }

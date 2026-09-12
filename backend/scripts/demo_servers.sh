@@ -62,10 +62,14 @@ detect_ip() {
   printf '%s' "$ip"
 }
 
+# Read the kernel's socket table; never open a connection. A `nc -z` probe
+# completes a TCP handshake and hangs up, which every peer and admin port logs
+# as a red ATTENTION about a connection that closed -- so running `status` during
+# a demo used to scribble fake faults across all three server windows.
 port_listening() {
   local port="$1"
-  if nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then return 0; fi
-  lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+  if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then return 0; fi
+  netstat -an 2>/dev/null | grep -qE "[.:]${port}[[:space:]]+.*LISTEN"
 }
 
 # Open a Terminal window running one command in the foreground.

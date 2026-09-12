@@ -1,5 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 
+import { Chip } from "@/components/ui/Chip";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { formatBytes } from "@/lib/format";
 import type { Vault } from "@/lib/backend";
 
@@ -42,42 +44,73 @@ export function Card({
 /**
  * A server is a heading, not a row: it names the group of vaults beneath it and
  * carries their address, so the card below can be pure content.
+ *
+ * A server the daemon cannot reach keeps its vaults on screen — they exist, and
+ * hiding them would read as data loss — but goes quiet: the identity dims, an
+ * Offline chip says why, and the one action it offers stops pretending it works.
  */
 export function ServerHeading({
   name,
   address,
+  online = true,
   onAdd,
 }: {
   name: string;
   address: string;
+  online?: boolean;
   onAdd(): void;
 }) {
+  /* The chip is the one thing on an offline heading that must stay readable, so
+     the dimming is applied per element rather than to the row that contains it. */
+  const dim = online ? "" : "opacity-45";
+
+  const plus = (
+    <button
+      type="button"
+      data-plus=""
+      // aria-disabled, not disabled: a disabled button takes no pointer events,
+      // so the tooltip explaining why it cannot be used would never appear —
+      // and an unexplained dead control is the thing this is here to avoid.
+      aria-disabled={online ? undefined : true}
+      onClick={online ? onAdd : undefined}
+      aria-label={online ? `Add vault to ${name}` : `Add vault to ${name} — server unreachable`}
+      className={`-mr-[3px] grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full
+        transition-colors duration-[160ms] ${EASE}
+        ${
+          online
+            ? "text-fg-3 hover:bg-surface-hover hover:text-fg focus-visible:text-fg"
+            : "cursor-default text-fg-3 opacity-40"
+        }`}
+    >
+      <Plus size={15} strokeWidth={ICON_STROKE} aria-hidden />
+    </button>
+  );
+
   return (
     <div className="mb-[10px] flex h-[28px] items-center">
       <Server
         size={ICON_SIZE}
         strokeWidth={ICON_STROKE}
-        className="shrink-0 text-fg-2"
+        className={`shrink-0 text-fg-2 ${dim}`}
         aria-hidden
       />
-      <span className="ml-[8px] truncate text-[15px] leading-none font-medium tracking-[-0.005em] text-fg">
+      <span
+        className={`ml-[8px] truncate text-[15px] leading-none font-medium tracking-[-0.005em] text-fg ${dim}`}
+      >
         {name}
       </span>
-      <span className="ml-[10px] truncate text-[13px] leading-none font-normal text-fg-3 tabular-nums">
+      <span
+        className={`ml-[10px] truncate text-[13px] leading-none font-normal text-fg-3 tabular-nums ${dim}`}
+      >
         {address}
       </span>
+      {online ? null : (
+        <Chip tone="warning" size="xs" className="ml-[8px]">
+          Offline
+        </Chip>
+      )}
       <span className="flex-1" />
-      <button
-        type="button"
-        data-plus=""
-        onClick={onAdd}
-        aria-label={`Add vault to ${name}`}
-        className={`-mr-[3px] grid h-[24px] w-[24px] shrink-0 place-items-center rounded-full
-          text-fg-3 transition-colors duration-[160ms] ${EASE}
-          hover:bg-surface-hover hover:text-fg focus-visible:text-fg`}
-      >
-        <Plus size={15} strokeWidth={ICON_STROKE} aria-hidden />
-      </button>
+      {online ? plus : <Tooltip label="Server unreachable">{plus}</Tooltip>}
     </div>
   );
 }

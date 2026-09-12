@@ -87,6 +87,19 @@ const MIN_QUOTA_BYTES: u64 = 268_435_456;
 const DEFAULT_CAPACITY_BYTES: u64 = 137_438_953_472;
 /// Each online member lends the vault its own disk, discounted for churn: 0.85 * 8 GiB.
 const MEMBER_CREDIT_BYTES: f64 = 0.85 * 8.0 * 1024.0 * 1024.0 * 1024.0;
+/// How long `create_vault`/`join_vault` wait for the vault task to actually be admitted before
+/// the half-made vault is rolled back.
+const ADMISSION_TIMEOUT: Duration = Duration::from_secs(12);
+/// How often the vault task is asked whether it is in.
+const ADMISSION_POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// A vault task must answer `Stop` inside this on app shutdown; the app has to quit promptly.
+const SHUTDOWN_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+/// The whole shutdown, as seen from the Tauri thread. Longer than one task's stop and short
+/// enough that the app never looks hung on quit.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
+
+/// The one callback every `backend://` event goes out through.
+pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
 /* ------------------------------------------------------------- requests */
 
@@ -113,6 +126,16 @@ pub enum Req {
     AdminResult(String, Result<Box<AdminStatus>, String>),
     /// A vault task found its membership revoked.
     VaultRevoked { vault_id: String, reason: String },
+    /// A vault task completed its first `Attempt::Joined`. `create_vault` and `join_vault` wait
+    /// for this before they answer, so a code that no host admits never leaves a vault behind.
+    ///
+    /// Nothing in this file sends it: it is the seam `vault.rs` fills in (see the interface note
+    /// on this task). Until it does, admission is detected by the polling fallback in
+    /// [`await_admission`], which is why the variant is allowed to be unconstructed here.
+    VaultJoined { vault_id: String },
+    /// Stop every vault task and flush the demo log, then acknowledge. Sent once, from
+    /// `Node::shutdown` on the app's exit event; a `std` sender so the Tauri thread can block.
+    Shutdown(std::sync::mpsc::Sender<()>),
     /// A vault's sidecar name changed, so the cached copy in `vault.json` is stale.
     VaultNameChanged { vault_id: String, name: String },
     /// `open_node` finished; keep the sidebar's recents current without a round trip.
@@ -130,7 +153,7 @@ pub struct Node {
 impl Node {
     /// Start the runtime on its own thread and return at once. The thread lives as long as the
     /// app: `Node` is stored in Tauri's managed state and never dropped before shutdown.
-    pub fn start(data_dir: PathBuf, emit: Arc<dyn Fn(&str, Value) + Send + Sync>) -> Node {
+    pub fn start(data_dir: PathBuf, emit: Emit) -> Node {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = Node { tx: tx.clone() };
         std::thread::Builder::new()
@@ -177,6 +200,18 @@ impl Node {
     }
 
     /* ------------------------------------------------------------ servers */
+
+    /// Wind the node down on the way out of the app: every vault task stops cleanly and the
+    /// demo log is flushed. Blocking and synchronous, because Tauri's exit event is; it gives
+    /// up after [`SHUTDOWN_WAIT`] so a wedged task can never stop the app from quitting, and
+    /// returns at once if the node thread is already gone.
+    pub fn shutdown(&self) {
+        let (ack, done) = std::sync::mpsc::channel();
+        if self.tx.send(Req::Shutdown(ack)).is_err() {
+            return;
+        }
+        let _ = done.recv_timeout(SHUTDOWN_WAIT);
+    }
 
     pub async fn status(&self) -> Result<DaemonStatus, String> {
         self.call(Req::Status).await
@@ -423,13 +458,16 @@ struct Live {
     record: VaultRecord,
     tx: UnboundedSender<VaultReq>,
     local: LocalNumbers,
+    /// The task has been admitted at least once (`Req::VaultJoined`). What `await_admission`
+    /// waits for; never cleared, because a reconnect is not a new admission.
+    joined: bool,
 }
 
 /// Root state. Single-threaded: the `RefCell` exists so the request tasks can share it, not
 /// for concurrency — no borrow is ever held across an `await`.
 struct RootState {
     data_dir: PathBuf,
-    emit: Arc<dyn Fn(&str, Value) + Send + Sync>,
+    emit: Emit,
     tx: UnboundedSender<Req>,
     profile: Profile,
     servers: Vec<ServerRecord>,
@@ -447,7 +485,7 @@ type Root = Rc<RefCell<RootState>>;
 /// Runtime entry point: load state, bring every vault back up, then serve requests forever.
 async fn run(
     data_dir: PathBuf,
-    emit: Arc<dyn Fn(&str, Value) + Send + Sync>,
+    emit: Emit,
     tx: UnboundedSender<Req>,
     mut rx: UnboundedReceiver<Req>,
 ) {
@@ -651,6 +689,16 @@ fn dispatch(state: &Root, req: Req) {
             let _ = reply.send(targets);
         }
         Req::AdminResult(server_id, result) => apply_admin(state, &server_id, result),
+        Req::VaultJoined { vault_id } => {
+            if let Some(live) = state
+                .borrow_mut()
+                .vaults
+                .iter_mut()
+                .find(|live| live.record.vault_id == vault_id)
+            {
+                live.joined = true;
+            }
+        }
         Req::VaultNameChanged { vault_id, name } => {
             let mut root = state.borrow_mut();
             if let Some(live) = root
@@ -718,6 +766,13 @@ fn dispatch(state: &Root, req: Req) {
                 let _ = reply.send(Ok(()));
             });
         }
+        Req::Shutdown(ack) => {
+            let state = state.clone();
+            tokio::task::spawn_local(async move {
+                shutdown(&state).await;
+                let _ = ack.send(());
+            });
+        }
         Req::VaultRevoked { vault_id, reason } => {
             let state = state.clone();
             tokio::task::spawn_local(async move {
@@ -769,15 +824,7 @@ impl RootState {
             .iter()
             .map(|record| {
                 let status = self.statuses.get(&record.id);
-                let capacity = match status {
-                    Some(status) => {
-                        status.server.capacity_bytes
-                            + (status.online_members_excluding_host() as f64 * MEMBER_CREDIT_BYTES)
-                                as u64
-                    }
-                    None if record.capacity_bytes > 0 => record.capacity_bytes,
-                    None => DEFAULT_CAPACITY_BYTES,
-                };
+                let capacity = server_capacity(status, record);
                 let vaults = self
                     .vaults
                     .iter()
@@ -896,6 +943,7 @@ impl RootState {
                 record,
                 tx,
                 local: LocalNumbers::default(),
+                joined: false,
             }),
             Err(_) => {
                 // A vault whose identity will not open (a stale lock, a half-written keystore)
@@ -1226,6 +1274,24 @@ fn apply_admin(state: &Root, server_id: &str, result: Result<Box<AdminStatus>, S
             root.statuses.insert(server_id.to_string(), status);
             root.push_admin_targets();
         }
+        Err(message) if message == admin::UNAUTHORIZED => {
+            // The token is stale (the host was restarted, or it printed a new connect string).
+            // Retrying it every second only fills the host's console with ATTENTION lines, so
+            // it is dropped from memory and from `servers.json`. `STATUS` needs no `AUTH`, so
+            // polling continues unauthenticated and the server stays online and visible; the
+            // owner-only actions will say "added without a connect string" until it is re-added.
+            let mut cleared = false;
+            if let Some(record) = root.servers.iter_mut().find(|r| r.id == server_id) {
+                cleared = record.token.take().is_some();
+            }
+            if cleared {
+                state::save_servers(&root.data_dir, &root.servers);
+                root.push_admin_targets();
+                // The server card's own fields do not change, so `emit_servers` at the end of
+                // this function would stay silent: say it outright.
+                (root.emit)("backend://servers-changed", Value::Null);
+            }
+        }
         Err(_) => {
             // One lost round is not an outage: a host is only drawn offline after two in a
             // row, and the first success brings it straight back.
@@ -1272,9 +1338,8 @@ async fn create_vault(state: &Root, input: CreateVaultInput) -> Result<Vault, St
             .clone()
             .ok_or("This server was added without a connect string")?;
         let status = root.statuses.get(&record.id);
-        let capacity = status
-            .map(|status| status.server.capacity_bytes)
-            .unwrap_or(record.capacity_bytes);
+        // The same number the server card shows, minus what its vaults already hold.
+        let capacity = server_capacity(status, &record);
         let allocated: u64 = status
             .map(|status| status.vaults.iter().map(|v| v.quota_bytes).sum())
             .unwrap_or(0);
@@ -1327,32 +1392,44 @@ async fn create_vault(state: &Root, input: CreateVaultInput) -> Result<Vault, St
         state::remember_short_code(&data_dir, &vault_hex, short);
     }
 
-    let mut root = state.borrow_mut();
-    let directory_addr = root
-        .statuses
-        .get(&record.id)
-        .map(|status| status.server.directory_addr.clone())
-        .or_else(|| record.directory_addr.clone())
-        .unwrap_or_default();
-    let vault_record = VaultRecord {
-        vault_id: vault_hex.clone(),
-        server_id: record.id.clone(),
-        join_code: code.to_string(),
-        name: name.clone(),
-        role: VaultRole::Owner,
-        directory_addr,
-    };
-    state::save_vault(&root.data_dir, &vault_record);
-    let profile_peer = root.profile.peer_id.clone();
-    root.start_vault(vault_record, Some((name.clone(), profile_peer)));
-    root.emit_servers();
-    if !root
-        .vaults
-        .iter()
-        .any(|live| live.record.vault_id == vault_hex)
     {
-        return Err("The server created the vault but it could not be opened".to_string());
+        // Scoped: the borrow must be gone before the admission wait below awaits anything.
+        let mut root = state.borrow_mut();
+        let directory_addr = root
+            .statuses
+            .get(&record.id)
+            .map(|status| status.server.directory_addr.clone())
+            .or_else(|| record.directory_addr.clone())
+            .unwrap_or_default();
+        let vault_record = VaultRecord {
+            vault_id: vault_hex.clone(),
+            server_id: record.id.clone(),
+            join_code: code.to_string(),
+            name: name.clone(),
+            role: VaultRole::Owner,
+            directory_addr,
+        };
+        state::save_vault(&root.data_dir, &vault_record);
+        let profile_peer = root.profile.peer_id.clone();
+        root.start_vault(vault_record, Some((name.clone(), profile_peer)));
+        root.emit_servers();
+        if !root
+            .vaults
+            .iter()
+            .any(|live| live.record.vault_id == vault_hex)
+        {
+            return Err("The server created the vault but it could not be opened".to_string());
+        }
     }
+
+    // The host provisioned the vault, but nothing is ours until it admits the identity we made
+    // in staging. Answering before that is what leaves a card on the home screen for a vault
+    // the member side never got into.
+    if let Err(reason) = await_admission(state, &vault_hex, Some(&creator), None).await {
+        drop_vault(state, &vault_hex).await;
+        return Err(reason);
+    }
+
     // The first `STATUS` is up to a second away, so answer from what we just asked for.
     Ok(Vault {
         id: vault_hex,
@@ -1392,7 +1469,7 @@ async fn join_vault(state: &Root, raw: &str) -> Result<Vault, String> {
             break;
         }
     }
-    let (directory, ad) = found.ok_or("Invalid join code")?;
+    let (directory, ad) = found.ok_or("That code didn't match any vault")?;
     let directory_addr = directory.to_string();
     let vault_hex = hex(&ad.vault_id.0);
     if let Some(existing) = state.borrow().vault_shape(&vault_hex) {
@@ -1405,34 +1482,152 @@ async fn join_vault(state: &Root, raw: &str) -> Result<Vault, String> {
     let admin_addr = admin_addr_for(ad.addr);
     let status = probe_admin(&admin_addr).await;
 
-    let mut root = state.borrow_mut();
-    // A directory that answered is worth writing down: the next code-only join needs it
-    // before any server or vault exists.
-    state::remember_directory_addr(&root.data_dir, directory);
-    let server_id = ensure_server(&mut root, &admin_addr, &host_peer, &directory_addr, status);
-    if let Some(short) = &short {
-        state::remember_short_code(&root.data_dir, &vault_hex, short);
-    }
+    let baseline = {
+        // Scoped: the borrow must be gone before the admission wait below awaits anything.
+        let mut root = state.borrow_mut();
+        // A directory that answered is worth writing down: the next code-only join needs it
+        // before any server or vault exists.
+        state::remember_directory_addr(&root.data_dir, directory);
+        let server_id = ensure_server(&mut root, &admin_addr, &host_peer, &directory_addr, status);
+        // Who the host counts as a member while we are certainly not one yet. `await_admission`
+        // waits for this set to grow; `None` means `STATUS` says nothing about this vault (no
+        // token for its server), and admission is read off the replicated sidecar instead.
+        let baseline: Option<HashSet<String>> = root
+            .statuses
+            .get(&server_id)
+            .filter(|status| status.vault(&vault_hex).is_some())
+            .map(|status| {
+                status
+                    .members_of(&vault_hex)
+                    .iter()
+                    .map(|member| member.peer.clone())
+                    .collect()
+            });
+        if let Some(short) = &short {
+            state::remember_short_code(&root.data_dir, &vault_hex, short);
+        }
 
-    let dir = state::vault_dir(&root.data_dir, &vault_hex);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create the vault folder: {e}"))?;
-    let record = VaultRecord {
-        vault_id: vault_hex.clone(),
-        server_id,
-        // The long form of the code we actually looked up, which is what `vault.json`
-        // carries; the six-character form (when that is what was typed) went into the
-        // vault's cache above.
-        join_code: code.to_string(),
-        name: String::new(),
-        role: VaultRole::Member,
-        directory_addr,
+        let dir = state::vault_dir(&root.data_dir, &vault_hex);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Could not create the vault folder: {e}"))?;
+        let record = VaultRecord {
+            vault_id: vault_hex.clone(),
+            server_id,
+            // The long form of the code we actually looked up, which is what `vault.json`
+            // carries; the six-character form (when that is what was typed) went into the
+            // vault's cache above.
+            join_code: code.to_string(),
+            name: String::new(),
+            role: VaultRole::Member,
+            directory_addr,
+        };
+        state::save_vault(&root.data_dir, &record);
+        root.start_vault(record, None);
+        root.push_admin_targets();
+        root.emit_servers();
+        if root.vault_shape(&vault_hex).is_none() {
+            return Err("That vault could not be opened".to_string());
+        }
+        baseline
     };
-    state::save_vault(&root.data_dir, &record);
-    root.start_vault(record, None);
-    root.push_admin_targets();
-    root.emit_servers();
-    root.vault_shape(&vault_hex)
+
+    // The directory answered, but only the host decides whether this peer is admitted: a
+    // rotated code, a kick or a vault that has forgotten us all look like a healthy lookup.
+    // Returning here would put a vault on the home screen that never connects, so the join is
+    // not a join until the task is in — and if it never gets in, the local copy is rolled back.
+    if let Err(reason) = await_admission(state, &vault_hex, None, baseline).await {
+        drop_vault(state, &vault_hex).await;
+        return Err(reason);
+    }
+    state
+        .borrow()
+        .vault_shape(&vault_hex)
         .ok_or_else(|| "That vault could not be opened".to_string())
+}
+
+/// Wait until the vault task has actually been admitted by its host, or give up after
+/// [`ADMISSION_TIMEOUT`].
+///
+/// Three things can say "in", in order of directness:
+/// 1. `Req::VaultJoined`, which sets `Live::joined` — the vault task's own `Attempt::Joined`.
+///    This is the signal `vault.rs` owns; everything below is a fallback for until it lands.
+/// 2. The host's own `STATUS` listing `own_peer` among the vault's members. Definitive, and
+///    available whenever we hold a token for the server — which `create_vault` always does.
+/// 3. The vault's sidecar having a creation time. `/.qfs-meta.json` is replicated content: a
+///    peer the host never admitted never receives it. Only consulted when `STATUS` has nothing
+///    to say about this vault (a code join onto a server we have no token for), because there
+///    the same field would otherwise be filled in from the host's numbers alone.
+async fn await_admission(
+    state: &Root,
+    vault_hex: &str,
+    own_peer: Option<&str>,
+    baseline: Option<HashSet<String>>,
+) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + ADMISSION_TIMEOUT;
+    loop {
+        let tx = {
+            let root = state.borrow();
+            let Some(live) = root
+                .vaults
+                .iter()
+                .find(|live| live.record.vault_id == vault_hex)
+            else {
+                // The task died, or a revocation already took the vault out of the list.
+                return Err("That vault could not be opened".to_string());
+            };
+            if live.joined {
+                return Ok(());
+            }
+            let numbers = root
+                .statuses
+                .get(&live.record.server_id)
+                .filter(|status| status.vault(vault_hex).is_some());
+            match (numbers, own_peer, &baseline) {
+                // We made the identity ourselves (`create_vault`), so the host naming it as a
+                // member is the join, stated by the only party that decides it.
+                (Some(status), Some(peer), _) => {
+                    if status
+                        .members_of(vault_hex)
+                        .iter()
+                        .any(|member| member.peer == peer)
+                    {
+                        return Ok(());
+                    }
+                    None
+                }
+                // A join: the vault task makes its own identity, so the root loop cannot name
+                // the peer to look for. It can watch for one appearing — the member list was
+                // read before the task was even started, and the host only ever adds a peer it
+                // admitted.
+                (Some(status), None, Some(before)) => {
+                    if status
+                        .members_of(vault_hex)
+                        .iter()
+                        .any(|member| !before.contains(&member.peer))
+                    {
+                        return Ok(());
+                    }
+                    None
+                }
+                // No `STATUS` numbers for this vault: the sidecar is the only witness we have.
+                _ => Some(live.tx.clone()),
+            }
+        };
+        if let Some(tx) = tx {
+            let (reply, answer) = oneshot::channel();
+            if tx.send(VaultReq::GetVaultMeta(reply)).is_ok() {
+                if let Ok(Ok(meta)) = answer.await {
+                    if meta.created_at > 0 {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("The vault server never let this Mac in".to_string());
+        }
+        tokio::time::sleep(ADMISSION_POLL_INTERVAL).await;
+    }
 }
 
 /// Where to ask about a join code when the user has added no server: the environment, the
@@ -1496,6 +1691,13 @@ async fn remove_member(state: &Root, vault_id: &str, peer_id: &str) -> Result<()
             vault_id: vault_id.to_string(),
         },
     );
+    // A kick rotates the join code, so the vault sheet showing the old one is stale too.
+    root.emit(
+        "backend://vault-changed",
+        &VaultIdPayload {
+            vault_id: vault_id.to_string(),
+        },
+    );
     Ok(())
 }
 
@@ -1517,6 +1719,30 @@ async fn delete_vault(state: &Root, vault_id: &str) -> Result<(), String> {
     }
     drop_vault(state, vault_id).await;
     Ok(())
+}
+
+/// App shutdown: let every vault task finish what it is doing and flush the demo log.
+///
+/// A vault task's `Stop` reply is sent after it has dropped its `KeyStore` and replica and
+/// flushed its saves, so waiting for it is what keeps a half-written cache off the disk. The
+/// directories stay exactly where they are — this is a quit, not a leave. Every `Stop` goes out
+/// before the first reply is waited on, so the tasks wind down in parallel and only the waiting
+/// is serial; a task that never answers costs [`SHUTDOWN_STOP_TIMEOUT`] and no more.
+async fn shutdown(state: &Root) {
+    let live: Vec<Live> = std::mem::take(&mut state.borrow_mut().vaults);
+    let waits: Vec<_> = live
+        .iter()
+        .filter_map(|live| {
+            let (reply, answer) = oneshot::channel();
+            live.tx.send(VaultReq::Stop(reply)).ok()?;
+            Some(tokio::time::timeout(SHUTDOWN_STOP_TIMEOUT, answer))
+        })
+        .collect();
+    for wait in waits {
+        let _ = wait.await;
+    }
+    drop(live);
+    quantam_fs::demo_log::flush();
 }
 
 /// Stop the task, move the local copy aside, and take the vault out of every list.
@@ -1555,6 +1781,23 @@ async fn drop_vault(state: &Root, vault_id: &str) {
 }
 
 /* ------------------------------------------------------------- free helpers */
+
+/// One server's capacity, exactly as the home screen draws it: what the host advertises plus a
+/// credit for every online member that is not the host.
+///
+/// `create_vault`'s size gate and [`RootState::servers`] must never disagree — a user who reads
+/// "1.2 TB free" and is then told "Not enough space on this server" has hit that bug — so both
+/// go through this one function.
+fn server_capacity(status: Option<&AdminStatus>, record: &ServerRecord) -> u64 {
+    match status {
+        Some(status) => {
+            status.server.capacity_bytes
+                + (status.online_members_excluding_host() as f64 * MEMBER_CREDIT_BYTES) as u64
+        }
+        None if record.capacity_bytes > 0 => record.capacity_bytes,
+        None => DEFAULT_CAPACITY_BYTES,
+    }
+}
 
 /// Did any number the home screen draws actually move?
 fn numbers_match(previous: Option<&AdminStatus>, next: &AdminStatus) -> bool {
