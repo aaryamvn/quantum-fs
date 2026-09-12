@@ -53,7 +53,8 @@ impl HostService {
         Err(crate::error::Error::NotImplemented("host presence lookup"))
     }
 
-    /// Appends an encrypted control packet in recipient order; chunk bodies are forbidden.
+    /// Appends an encrypted pairwise packet in recipient order. Offline mailboxes
+    /// may include encrypt-at-send chunk bodies as well as control.
     pub fn append_mailbox(&mut self, _envelope: MailboxEnvelope) -> Result<()> {
         Err(crate::error::Error::NotImplemented(
             "ordered mailbox append",
@@ -77,7 +78,9 @@ impl HostService {
         Err(crate::error::Error::NotImplemented("ordered mailbox flush"))
     }
 
-    /// Fans out committed control updates only, never chunk bodies.
+    /// Fans out committed control updates to online members. Chunk bodies for
+    /// online members are pulled; offline members get encrypt-at-send bodies
+    /// via append_mailbox as the change happens.
     pub fn fan_out_control(&mut self, _sender_id: PeerId, _control: &ControlUpdate) -> Result<()> {
         Err(crate::error::Error::NotImplemented("host control fan-out"))
     }
