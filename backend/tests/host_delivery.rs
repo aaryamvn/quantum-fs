@@ -92,7 +92,7 @@ fn signed_manifest(
     let chunk_id = chunks
         .lock()
         .map_err(|_| quantam_fs::Error::State("test chunk lock poisoned"))?
-        .put(&file_id, 0, plaintext.to_vec());
+        .put(&file_id, 0, plaintext.to_vec())?;
     let mut manifest = Manifest {
         file_id,
         chunk_ids: vec![chunk_id],
@@ -152,9 +152,12 @@ fn host_coalesces_offline_bodies_reseals_and_flushes_before_live_pull() -> quant
             plaintext,
             version as u64 + 1,
         )?)?;
+        if version == 0 {
+            host.link_file(host_id, "/file", file_id)?;
+        }
     }
 
-    assert_eq!(host.instruction_log().len(), 3);
+    assert_eq!(host.instruction_log().len(), 4);
     let queued = host.mailbox(offline_id)?;
     let (controls, bodies) = queued.iter().try_fold(
         (0, Vec::new()),
@@ -168,11 +171,11 @@ fn host_coalesces_offline_bodies_reseals_and_flushes_before_live_pull() -> quant
             }
         },
     )?;
-    assert_eq!(controls, 3);
+    assert_eq!(controls, 4);
     assert_eq!(bodies.len(), 1);
 
     let online_controls = host.take_online_control(online_id)?;
-    assert_eq!(online_controls.len(), 3);
+    assert_eq!(online_controls.len(), 4);
     for packet in &online_controls {
         online.apply_control(packet)?;
     }
@@ -248,9 +251,9 @@ fn host_coalesces_offline_bodies_reseals_and_flushes_before_live_pull() -> quant
         &encoding::flush_m(&challenge),
     )?;
     let report = host.flush_mailbox(&mut offline, &challenge, &signature)?;
-    assert_eq!(report.controls, 3);
+    assert_eq!(report.controls, 4);
     assert_eq!(report.chunks_written, 1);
-    assert_eq!(offline.instruction_log().len(), 3);
+    assert_eq!(offline.instruction_log().len(), 4);
     assert_eq!(
         offline_chunks
             .lock()
@@ -305,6 +308,7 @@ fn untaken_online_control_is_resealed_in_fifo_order_after_rotation_and_offline_c
         b"online version",
         1,
     )?)?;
+    host.link_file(host_id, "/file", file_id)?;
     rotate_from(&host_keys, &member_keys)?;
     host.heartbeat(member_id, Duration::ZERO)?;
     host.commit(signed_manifest(
@@ -316,7 +320,7 @@ fn untaken_online_control_is_resealed_in_fifo_order_after_rotation_and_offline_c
     )?)?;
 
     let mailbox = host.mailbox(member_id)?;
-    assert_eq!(mailbox.len(), 3);
+    assert_eq!(mailbox.len(), 4);
     assert!(mailbox.iter().all(|envelope| envelope.epoch == Epoch(2)));
     let control_sequences: Vec<_> = mailbox
         .iter()
@@ -328,7 +332,7 @@ fn untaken_online_control_is_resealed_in_fifo_order_after_rotation_and_offline_c
             .then_some(envelope.seq.0)
         })
         .collect();
-    assert_eq!(control_sequences, vec![1, 2]);
+    assert_eq!(control_sequences, vec![1, 2, 3]);
 
     let challenge = host.issue_flush_challenge(member_id)?;
     let signature = RustCryptoPureMlDsa.sign(
@@ -337,9 +341,9 @@ fn untaken_online_control_is_resealed_in_fifo_order_after_rotation_and_offline_c
         &encoding::flush_m(&challenge),
     )?;
     let report = host.flush_mailbox(&mut member, &challenge, &signature)?;
-    assert_eq!(report.controls, 2);
+    assert_eq!(report.controls, 3);
     assert_eq!(report.chunks_written, 1);
-    assert_eq!(member.instruction_log().len(), 2);
+    assert_eq!(member.instruction_log().len(), 3);
     let latest = member
         .trusted_manifest(&file_id)
         .ok_or(quantam_fs::Error::State("member manifest missing"))?
@@ -378,7 +382,7 @@ fn fifo_flush_accepts_more_chunk_bodies_than_the_replay_window() -> quantam_fs::
         for index in 0..CHUNK_COUNT {
             let plaintext = format!("mailbox chunk {index}").into_bytes();
             total_size += plaintext.len() as u64;
-            chunk_ids.push(chunks.put(&file_id, index as u64, plaintext));
+            chunk_ids.push(chunks.put(&file_id, index as u64, plaintext)?);
         }
     }
     let mut manifest = Manifest {
@@ -399,7 +403,8 @@ fn fifo_flush_accepts_more_chunk_bodies_than_the_replay_window() -> quantam_fs::
     let mut member =
         MemberReplica::new(member_keys.clone(), host_id, members, member_chunks.clone())?;
     host.commit(manifest)?;
-    assert_eq!(host.mailbox(member_id)?.len(), CHUNK_COUNT + 1);
+    host.link_file(host_id, "/file", file_id)?;
+    assert_eq!(host.mailbox(member_id)?.len(), CHUNK_COUNT + 2);
     let host_pull = InProcessPullCoordinator::new(host_keys, host_chunks);
     assert!(host_pull
         .serve(&PullRequest::new(vec![chunk_ids[0]])?, member_id)
@@ -412,7 +417,7 @@ fn fifo_flush_accepts_more_chunk_bodies_than_the_replay_window() -> quantam_fs::
         &encoding::flush_m(&challenge),
     )?;
     let report = host.flush_mailbox(&mut member, &challenge, &signature)?;
-    assert_eq!(report.controls, 1);
+    assert_eq!(report.controls, 2);
     assert_eq!(report.chunks_written, CHUNK_COUNT);
     let chunks = member_chunks
         .lock()

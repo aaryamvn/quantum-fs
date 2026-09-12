@@ -93,13 +93,24 @@ impl InProcessPullCoordinator {
             .chunks
             .lock()
             .map_err(|_| Error::State("chunk store lock poisoned"))?;
+        let mut next = chunks.clone();
         let mut count = 0;
         for (file_id, index, plaintext) in staged {
             let chunk_id = encoding::chunk_id(&file_id, index, &plaintext);
-            if !chunks.has(&chunk_id) {
-                chunks.put(&file_id, index, plaintext);
+            // Control apply and pull acceptance synchronize on this store lock.
+            // Re-check the current manifest at the final mutation boundary so an
+            // in-flight pull cannot recreate bytes after Clear/Remove/Unlink.
+            if !chunks.accepts_chunk(&file_id, index, &chunk_id) {
+                continue;
+            }
+            if !next.has(&chunk_id) {
+                next.put(&file_id, index, plaintext)?;
                 count += 1;
             }
+        }
+        if count != 0 {
+            next.persist_current()?;
+            *chunks = next;
         }
         Ok(count)
     }
@@ -223,9 +234,15 @@ pub fn receive_chunk(
 ) -> Result<bool> {
     let plaintext = open_chunk(keys, session, frame, trusted)?;
     let expected = encoding::chunk_id(&frame.file_id, frame.index, &plaintext);
+    if !store.accepts_chunk(&frame.file_id, frame.index, &expected) {
+        return Ok(false);
+    }
     if store.has(&expected) {
         return Ok(false);
     }
-    store.put(&frame.file_id, frame.index, plaintext);
+    let mut next = store.clone();
+    next.put(&frame.file_id, frame.index, plaintext)?;
+    next.persist_current()?;
+    *store = next;
     Ok(true)
 }

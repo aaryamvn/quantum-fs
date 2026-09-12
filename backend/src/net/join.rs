@@ -2,7 +2,7 @@ use super::{JoinCode, VaultId};
 use crate::{
     crypto::{
         identity::IdentityDocument,
-        sign::{PureMlDsa, RustCryptoPureMlDsa, JOIN_CONTEXT},
+        sign::{PureMlDsa, RustCryptoPureMlDsa, JOIN_CONTEXT, MANIFEST_CONTEXT},
     },
     encoding,
     keystore::KeyStore,
@@ -72,6 +72,9 @@ pub enum NetControl {
     },
     Ready,
     Heartbeat,
+    HeartbeatApplied {
+        through: u64,
+    },
 }
 
 #[derive(Clone)]
@@ -88,18 +91,25 @@ use super::{
     session::{self, HandshakeProgress},
 };
 use crate::{
-    ids::PeerId,
-    keystore::IdentityKeyStore,
+    ids::{FileId, PeerId},
+    keystore::{random_bytes, IdentityKeyStore},
     protocol::{
+        locate::{HaveQuery, HaveReply, HAVE_MAGIC},
+        manifest::{Manifest, TrustedManifest},
         packet::{PacketHeader, PROTOCOL_VERSION},
-        pull::ChunkBodyFrame,
+        pull::{ChunkBodyFrame, PullRequest, PullResponse},
     },
-    store::chunks::shared_chunk_store,
-    sync::host::{HostService, HostState, MailboxEnvelope, MemberReplica},
+    store::chunks::{shared_chunk_store, ChunkStore},
+    sync::{
+        host::{
+            ControlRecord, ControlUpdate, HostService, HostState, MailboxEnvelope, MemberReplica,
+        },
+        pull::{encrypt_at_send, open_chunk, InProcessPullCoordinator},
+    },
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     net::SocketAddr,
     path::{Path, PathBuf},
     rc::Rc,
@@ -143,7 +153,12 @@ impl VaultHost {
             },
         };
         let members: BTreeSet<_> = metadata.members.iter().copied().collect();
-        let host = HostService::new(keys.clone(), members, shared_chunk_store())?;
+        let host = HostService::new_in_vault(
+            keys.clone(),
+            members,
+            shared_chunk_store(),
+            FileId(metadata.vault_id.0),
+        )?;
         let vault = Self {
             keys,
             host,
@@ -151,6 +166,20 @@ impl VaultHost {
             path: path.to_owned(),
             active_peers: BTreeSet::new(),
         };
+        vault.persist()?;
+        Ok(vault)
+    }
+    pub fn open_durable(keys: KeyStore, path: &Path, data_dir: &Path) -> Result<Self> {
+        let mut vault = Self::load_or_create(keys.clone(), path)?;
+        vault.host = HostService::open_durable(
+            keys,
+            data_dir,
+            crate::ids::FileId(vault.metadata.vault_id.0),
+            vault.metadata.members.iter().copied().collect(),
+        )?;
+        // replica.bin is authoritative for admitted membership. The small vault
+        // file continues to hold only admission metadata and a compatibility list.
+        vault.metadata.members = vault.host.members().iter().copied().collect();
         vault.persist()?;
         Ok(vault)
     }
@@ -534,6 +563,8 @@ pub struct JoinedPeer {
     peer_id: PeerId,
     pub replica: Rc<RefCell<MemberReplica>>,
     pub vault_id: VaultId,
+    pending_controls: Vec<ControlRecord>,
+    pending_control_bytes: usize,
 }
 
 pub async fn join_host(
@@ -587,11 +618,12 @@ pub async fn join_host(
             }
             replica
         }
-        None => Rc::new(RefCell::new(MemberReplica::new(
+        None => Rc::new(RefCell::new(MemberReplica::new_in_vault(
             keys.clone(),
             ad.peer_id,
             BTreeSet::from([keys.peer_id()?, ad.peer_id]),
             shared_chunk_store(),
+            FileId(ad.vault_id.0),
         )?)),
     };
     keys.block_live_traffic(ad.peer_id, TRANSPORT_GATE)?;
@@ -621,6 +653,8 @@ pub async fn join_host(
         peer_id: ad.peer_id,
         replica,
         vault_id: ad.vault_id,
+        pending_controls: Vec::new(),
+        pending_control_bytes: 0,
     })
 }
 
@@ -685,34 +719,456 @@ async fn serve_live(
     peer: PeerId,
 ) -> Result<()> {
     let keys = vault.borrow().keys.clone();
+    let mut upload: Option<PendingUpload> = None;
     loop {
         keys.require_live_traffic(peer)?;
-        let control = tokio::time::timeout(IDLE_TIMEOUT, read_control(stream, &keys, peer))
-            .await
-            .map_err(|_| Error::State("peer idle timeout"))??;
-        if control != NetControl::Heartbeat {
-            return Err(Error::State("unsupported live control"));
+        let received = tokio::time::timeout(
+            IDLE_TIMEOUT,
+            read_after_ack(stream, keys.current_session(peer)?.epoch),
+        )
+        .await
+        .map_err(|_| Error::State("peer idle timeout"))??;
+        // A mailbox refresh can close the pair gate while this read is pending.
+        keys.require_live_traffic(peer)?;
+        match received.kind {
+            frame::GCM_PACKET_KIND => {
+                let packet = encoding::decode_control_packet(&received.payload)?;
+                require_live_header(&packet.header, peer, keys.peer_id()?, &keys)?;
+                let plaintext = session::open_packet(&keys, peer, &packet)?;
+                if plaintext.starts_with(HAVE_MAGIC) {
+                    let query = encoding::decode_have_query(&plaintext)?;
+                    let reply =
+                        crate::net::locate::answer_have(&vault.borrow().host.chunks(), &query)?;
+                    send_member_state(stream, vault, &keys, peer).await?;
+                    let packet =
+                        session::seal_packet(&keys, peer, &encoding::encode_have_reply(&reply)?)?;
+                    send_frame(
+                        stream,
+                        &Frame::new(
+                            frame::GCM_PACKET_KIND,
+                            encoding::encode_control_packet(&packet)?,
+                        )?,
+                    )
+                    .await?;
+                    send_control(stream, &keys, peer, &NetControl::Heartbeat).await?;
+                    continue;
+                }
+                if let Ok(control) = encoding::decode_net_control(&plaintext) {
+                    match control {
+                        NetControl::Heartbeat => {
+                            if upload
+                                .as_ref()
+                                .is_some_and(|pending| !pending.is_complete())
+                            {
+                                send_control(
+                                    stream,
+                                    &keys,
+                                    peer,
+                                    &NetControl::HeartbeatApplied { through: 0 },
+                                )
+                                .await?;
+                                continue;
+                            }
+                            if upload.is_some() {
+                                finalize_upload(vault, peer, &mut upload, None)?;
+                            }
+                        }
+                        NetControl::HeartbeatApplied { through } => {
+                            vault.borrow_mut().host.acknowledge_applied(peer, through)?;
+                        }
+                        _ => return Err(Error::State("unsupported live control")),
+                    }
+                    vault.borrow_mut().host.heartbeat(peer, IDLE_TIMEOUT)?;
+                    send_pending_controls(stream, vault, &keys, peer).await?;
+                    continue;
+                }
+                if let Ok(request) = encoding::decode_pull_request(&plaintext) {
+                    let pull =
+                        InProcessPullCoordinator::new(keys.clone(), vault.borrow().host.chunks());
+                    let responses = pull.serve(&request, peer)?;
+                    send_member_state(stream, vault, &keys, peer).await?;
+                    for response in responses {
+                        send_frame(
+                            stream,
+                            &Frame::new(
+                                frame::GCM_CHUNK_KIND,
+                                encoding::encode_chunk_body_frame(&response.body)?,
+                            )?,
+                        )
+                        .await?;
+                    }
+                    send_control(stream, &keys, peer, &NetControl::Heartbeat).await?;
+                    continue;
+                }
+                let record = encoding::decode_control_record(&plaintext)?;
+                if record.id != 0 {
+                    return Err(Error::AuthenticationFailed);
+                }
+                receive_member_control(vault, peer, record.update, &mut upload)?;
+                if upload.is_none() {
+                    send_pending_controls(stream, vault, &keys, peer).await?;
+                }
+            }
+            frame::GCM_CHUNK_KIND => {
+                let body = encoding::decode_chunk_body_frame(&received.payload)?;
+                require_live_header(&body.header, peer, keys.peer_id()?, &keys)?;
+                receive_upload_body(peer, &keys, body, &mut upload)?;
+                if upload.is_none() {
+                    send_pending_controls(stream, vault, &keys, peer).await?;
+                }
+            }
+            _ => return Err(Error::State("unsupported live frame")),
         }
-        vault.borrow_mut().host.heartbeat(peer, IDLE_TIMEOUT)?;
-        let packets = vault.borrow_mut().host.take_online_control(peer)?;
-        for packet in packets {
-            send_frame(
-                stream,
-                &Frame::new(
-                    frame::GCM_PACKET_KIND,
-                    encoding::encode_control_packet(&packet)?,
-                )?,
-            )
-            .await?;
-        }
-        send_control(stream, &keys, peer, &NetControl::Heartbeat).await?;
     }
 }
 
+struct PendingUpload {
+    trusted: TrustedManifest,
+    bodies: BTreeMap<u64, Vec<u8>>,
+    bytes: usize,
+}
+
+impl PendingUpload {
+    fn is_complete(&self) -> bool {
+        self.bodies.len() == self.trusted.manifest().chunk_ids.len()
+    }
+}
+
+fn require_live_header(
+    header: &PacketHeader,
+    sender: PeerId,
+    receiver: PeerId,
+    keys: &KeyStore,
+) -> Result<()> {
+    if header.sender_id != sender
+        || header.receiver_id != receiver
+        || header.version != PROTOCOL_VERSION
+        || header.epoch != keys.current_session(sender)?.epoch
+    {
+        return Err(Error::AuthenticationFailed);
+    }
+    Ok(())
+}
+
+fn receive_member_control(
+    vault: &Rc<RefCell<VaultHost>>,
+    peer: PeerId,
+    update: ControlUpdate,
+    upload: &mut Option<PendingUpload>,
+) -> Result<()> {
+    match update {
+        ControlUpdate::NewManifest(manifest) => {
+            if upload.is_some() {
+                return Err(Error::State("file upload is incomplete"));
+            }
+            let trusted = vault.borrow().host.verify_writer_manifest(peer, manifest)?;
+            *upload = Some(PendingUpload {
+                trusted,
+                bodies: BTreeMap::new(),
+                bytes: 0,
+            });
+        }
+        link @ ControlUpdate::Link {
+            child,
+            is_dir: false,
+            ..
+        } => {
+            let pending = upload
+                .as_ref()
+                .ok_or(Error::State("file link arrived without an upload"))?;
+            if child != pending.trusted.manifest().file_id || !pending.is_complete() {
+                return Err(Error::State("file link does not complete the upload"));
+            }
+            finalize_upload(vault, peer, upload, Some(link))?;
+        }
+        update => {
+            if upload.is_some() {
+                return Err(Error::State("file upload is incomplete"));
+            }
+            vault.borrow_mut().host.fan_out_control(peer, &update)?;
+        }
+    }
+    Ok(())
+}
+
+fn receive_upload_body(
+    peer: PeerId,
+    keys: &KeyStore,
+    body: ChunkBodyFrame,
+    upload: &mut Option<PendingUpload>,
+) -> Result<()> {
+    let pending = upload
+        .as_mut()
+        .ok_or(Error::State("chunk body arrived without a manifest"))?;
+    let session = keys.current_session(peer)?;
+    let plaintext = open_chunk(keys, &session, &body, &pending.trusted)?;
+    pending.bytes = pending
+        .bytes
+        .checked_add(plaintext.len())
+        .ok_or(Error::InvalidInput("upload size overflow"))?;
+    if pending.bytes > MAX_DRAIN_BYTES {
+        return Err(Error::InvalidInput("upload exceeds memory budget"));
+    }
+    if pending.bodies.insert(body.index, plaintext).is_some() {
+        return Err(Error::InvalidInput("duplicate upload chunk index"));
+    }
+    Ok(())
+}
+
+fn finalize_upload(
+    vault: &Rc<RefCell<VaultHost>>,
+    peer: PeerId,
+    upload: &mut Option<PendingUpload>,
+    link: Option<ControlUpdate>,
+) -> Result<()> {
+    let completed = upload
+        .take()
+        .ok_or(Error::State("completed upload disappeared"))?;
+    if !completed.is_complete() {
+        *upload = Some(completed);
+        return Err(Error::State("file upload is incomplete"));
+    }
+    vault.borrow_mut().host.commit_writer_upload(
+        peer,
+        completed.trusted.manifest().clone(),
+        completed.bodies,
+        link,
+    )
+}
+
+async fn send_pending_controls(
+    stream: &mut TcpStream,
+    vault: &Rc<RefCell<VaultHost>>,
+    keys: &KeyStore,
+    peer: PeerId,
+) -> Result<()> {
+    send_member_state(stream, vault, keys, peer).await?;
+    send_control(stream, keys, peer, &NetControl::Heartbeat).await
+}
+
+async fn send_member_state(
+    stream: &mut TcpStream,
+    vault: &Rc<RefCell<VaultHost>>,
+    keys: &KeyStore,
+    peer: PeerId,
+) -> Result<()> {
+    // These packets may carry counters much older than a freshly sealed
+    // membership update. Open them first so W=1024 cannot expire the queue.
+    let packets = vault.borrow_mut().host.take_online_control(peer)?;
+    for packet in packets {
+        send_frame(
+            stream,
+            &Frame::new(
+                frame::GCM_PACKET_KIND,
+                encoding::encode_control_packet(&packet)?,
+            )?,
+        )
+        .await?;
+    }
+    // The receiver buffers authenticated records until this verified identity
+    // refresh arrives, then verifies each writer signature before applying it.
+    let welcome = vault.borrow().welcome()?;
+    send_control(stream, keys, peer, &welcome).await?;
+    Ok(())
+}
+
 impl JoinedPeer {
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn have_query(&mut self, query: &HaveQuery) -> Result<HaveReply> {
+        self.keys.require_live_traffic(self.peer_id)?;
+        let packet = session::seal_packet(
+            &self.keys,
+            self.peer_id,
+            &encoding::encode_have_query(query)?,
+        )?;
+        send_frame(
+            &mut self.stream,
+            &Frame::new(
+                frame::GCM_PACKET_KIND,
+                encoding::encode_control_packet(&packet)?,
+            )?,
+        )
+        .await?;
+        let reply = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut reply = None;
+            loop {
+                let plaintext = self.read_live_packet().await?;
+                if plaintext.starts_with(HAVE_MAGIC) {
+                    if reply.is_some() {
+                        return Err(Error::AuthenticationFailed);
+                    }
+                    let candidate = encoding::decode_have_reply(&plaintext)?;
+                    candidate.validate(query)?;
+                    reply = Some(candidate);
+                } else if self.apply_live_plaintext(&plaintext)? {
+                    break;
+                }
+            }
+            reply.ok_or(Error::State("host omitted have reply"))
+        })
+        .await
+        .map_err(|_| Error::State("have query deadline exceeded"))??;
+        self.acknowledge_after_drain().await?;
+        Ok(reply)
+    }
+
+    pub async fn pull(
+        &mut self,
+        request: &PullRequest,
+        trusted_manifest: &TrustedManifest,
+    ) -> Result<usize> {
+        self.keys.require_live_traffic(self.peer_id)?;
+        let packet = session::seal_packet(
+            &self.keys,
+            self.peer_id,
+            &encoding::encode_pull_request(request)?,
+        )?;
+        send_frame(
+            &mut self.stream,
+            &Frame::new(
+                frame::GCM_PACKET_KIND,
+                encoding::encode_control_packet(&packet)?,
+            )?,
+        )
+        .await?;
+        let mut responses = Vec::new();
+        let mut frames = 0u32;
         loop {
+            let received = tokio::time::timeout(
+                IDLE_TIMEOUT,
+                read_after_ack(
+                    &mut self.stream,
+                    self.keys.current_session(self.peer_id)?.epoch,
+                ),
+            )
+            .await
+            .map_err(|_| Error::State("host idle timeout"))??;
             self.keys.require_live_traffic(self.peer_id)?;
+            frames = frames
+                .checked_add(1)
+                .ok_or(Error::InvalidInput("pull response frame overflow"))?;
+            if frames > MAX_DRAIN_FRAMES {
+                return Err(Error::InvalidInput("pull response frame budget exceeded"));
+            }
+            match received.kind {
+                frame::GCM_CHUNK_KIND => {
+                    if responses.len() >= request.chunk_ids().len() {
+                        return Err(Error::AuthenticationFailed);
+                    }
+                    responses.push(PullResponse {
+                        body: encoding::decode_chunk_body_frame(&received.payload)?,
+                    });
+                }
+                frame::GCM_PACKET_KIND => {
+                    let packet = encoding::decode_control_packet(&received.payload)?;
+                    require_live_header(
+                        &packet.header,
+                        self.peer_id,
+                        self.keys.peer_id()?,
+                        &self.keys,
+                    )?;
+                    let plaintext = session::open_packet(&self.keys, self.peer_id, &packet)?;
+                    if self.apply_live_plaintext(&plaintext)? {
+                        break;
+                    }
+                }
+                _ => return Err(Error::State("unexpected pull response frame")),
+            }
+        }
+        let pull = InProcessPullCoordinator::new(self.keys.clone(), self.replica.borrow().chunks());
+        let written = pull.accept(&responses, trusted_manifest)?;
+        self.acknowledge_after_drain().await?;
+        Ok(written)
+    }
+
+    pub async fn mkdir(&mut self, path: &str) -> Result<FileId> {
+        let (parent, name) = self.replica.borrow().tree().resolve_parent(path)?;
+        let child = FileId(random_bytes()?);
+        self.submit_control(&ControlUpdate::Link {
+            parent,
+            name,
+            child,
+            is_dir: true,
+        })
+        .await?;
+        Ok(child)
+    }
+
+    pub async fn unlink(&mut self, path: &str) -> Result<()> {
+        let (parent, name) = self.replica.borrow().tree().resolve_parent(path)?;
+        self.submit_control(&ControlUpdate::Unlink { parent, name })
+            .await
+    }
+
+    pub async fn rename(&mut self, source: &str, destination: &str) -> Result<()> {
+        let (src_parent, src_name) = self.replica.borrow().tree().resolve_parent(source)?;
+        let (dst_parent, dst_name) = self.replica.borrow().tree().resolve_parent(destination)?;
+        self.submit_control(&ControlUpdate::Rename {
+            src_parent,
+            src_name,
+            dst_parent,
+            dst_name,
+        })
+        .await
+    }
+
+    pub async fn save_file(&mut self, path: &str, bodies: &[Vec<u8>]) -> Result<FileId> {
+        self.keys.require_live_traffic(self.peer_id)?;
+        let (existing, parent, name, version) = {
+            let replica = self.replica.borrow();
+            let (parent, name) = replica.tree().resolve_parent(path)?;
+            let existing = replica.tree().resolve(path).ok();
+            if existing.is_some_and(|file_id| replica.tree().is_dir(&file_id)) {
+                return Err(Error::InvalidInput("cannot save a directory"));
+            }
+            let version = existing
+                .and_then(|file_id| replica.trusted_manifest(&file_id))
+                .map_or(Ok(1), |trusted| {
+                    trusted
+                        .manifest()
+                        .version
+                        .checked_add(1)
+                        .ok_or(Error::State("manifest version exhausted"))
+                })?;
+            (existing, parent, name, version)
+        };
+        let file_id = existing.unwrap_or(FileId(random_bytes()?));
+        let mut manifest = Manifest {
+            file_id,
+            chunk_ids: Vec::with_capacity(bodies.len()),
+            size: 0,
+            writer_id: self.keys.peer_id()?,
+            version,
+            signature: Vec::new(),
+        };
+        for (index, plaintext) in bodies.iter().enumerate() {
+            if plaintext.len() as u64 > crate::store::durable::MAX_CHUNK_BYTES {
+                return Err(Error::InvalidInput("chunk exceeds 1 MiB"));
+            }
+            manifest.size = manifest
+                .size
+                .checked_add(plaintext.len() as u64)
+                .ok_or(Error::InvalidInput("file size overflow"))?;
+            manifest.chunk_ids.push(encoding::chunk_id(
+                &file_id,
+                u64::try_from(index).map_err(|_| Error::InvalidInput("chunk index exceeds u64"))?,
+                plaintext,
+            ));
+        }
+        manifest.signature = RustCryptoPureMlDsa.sign(
+            &self.keys.signing_key()?,
+            MANIFEST_CONTEXT,
+            &encoding::manifest_m(&manifest)?,
+        )?;
+        self.send_manifest_bodies(&manifest, bodies).await?;
+        if existing.is_none() {
+            self.send_record(&ControlUpdate::Link {
+                parent,
+                name,
+                child: file_id,
+                is_dir: false,
+            })
+            .await?;
+        } else {
             send_control(
                 &mut self.stream,
                 &self.keys,
@@ -720,35 +1176,224 @@ impl JoinedPeer {
                 &NetControl::Heartbeat,
             )
             .await?;
-            loop {
-                let received = tokio::time::timeout(
-                    IDLE_TIMEOUT,
-                    read_after_ack(
-                        &mut self.stream,
-                        self.keys.current_session(self.peer_id)?.epoch,
-                    ),
-                )
-                .await
-                .map_err(|_| Error::State("host idle timeout"))??;
-                if received.kind != frame::GCM_PACKET_KIND {
-                    return Err(Error::State("unexpected live frame"));
-                }
-                let packet = encoding::decode_control_packet(&received.payload)?;
-                // Heartbeat is a one-byte canonical control. Writer manifests are
-                // much larger, so dispatch without opening/replaying them twice.
-                if packet.ciphertext.len() == 17 {
-                    if encoding::decode_net_control(&session::open_packet(
-                        &self.keys,
-                        self.peer_id,
-                        &packet,
-                    )?)? != NetControl::Heartbeat
-                    {
-                        return Err(Error::State("unexpected live reply"));
-                    }
-                    break;
-                }
-                self.replica.borrow_mut().apply_control(&packet)?;
+        }
+        self.finish_submission().await?;
+        self.store_local_bodies(&manifest, bodies)?;
+        Ok(file_id)
+    }
+
+    pub async fn submit_control(&mut self, update: &ControlUpdate) -> Result<()> {
+        if matches!(update, ControlUpdate::NewManifest(_)) {
+            return Err(Error::InvalidInput(
+                "use submit_manifest to send file content",
+            ));
+        }
+        self.keys.require_live_traffic(self.peer_id)?;
+        self.send_record(update).await?;
+        self.finish_submission().await
+    }
+
+    pub async fn submit_manifest(&mut self, manifest: Manifest, bodies: &[Vec<u8>]) -> Result<()> {
+        self.keys.require_live_traffic(self.peer_id)?;
+        self.send_manifest_bodies(&manifest, bodies).await?;
+        send_control(
+            &mut self.stream,
+            &self.keys,
+            self.peer_id,
+            &NetControl::Heartbeat,
+        )
+        .await?;
+        self.finish_submission().await?;
+        self.store_local_bodies(&manifest, bodies)
+    }
+
+    async fn send_manifest_bodies(
+        &mut self,
+        manifest: &Manifest,
+        bodies: &[Vec<u8>],
+    ) -> Result<()> {
+        if manifest.writer_id != self.keys.peer_id()? || manifest.chunk_ids.len() != bodies.len() {
+            return Err(Error::InvalidInput("manifest does not match upload bodies"));
+        }
+        for (index, (expected, plaintext)) in manifest.chunk_ids.iter().zip(bodies).enumerate() {
+            let index =
+                u64::try_from(index).map_err(|_| Error::InvalidInput("chunk index exceeds u64"))?;
+            if encoding::chunk_id(&manifest.file_id, index, plaintext) != *expected {
+                return Err(Error::AuthenticationFailed);
             }
+        }
+        self.send_record(&ControlUpdate::NewManifest(manifest.clone()))
+            .await?;
+        let session = self.keys.current_session(self.peer_id)?;
+        for (index, plaintext) in bodies.iter().enumerate() {
+            let body = encrypt_at_send(
+                &self.keys,
+                &session,
+                manifest.file_id,
+                u64::try_from(index).map_err(|_| Error::InvalidInput("chunk index exceeds u64"))?,
+                plaintext,
+            )?;
+            send_frame(
+                &mut self.stream,
+                &Frame::new(
+                    frame::GCM_CHUNK_KIND,
+                    encoding::encode_chunk_body_frame(&body)?,
+                )?,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    fn store_local_bodies(&self, manifest: &Manifest, bodies: &[Vec<u8>]) -> Result<()> {
+        let chunks = self.replica.borrow().chunks();
+        let mut current = chunks
+            .lock()
+            .map_err(|_| Error::State("chunk store poisoned"))?;
+        let mut staged = current.clone();
+        for (index, plaintext) in bodies.iter().enumerate() {
+            staged.put(
+                &manifest.file_id,
+                u64::try_from(index).map_err(|_| Error::InvalidInput("chunk index exceeds u64"))?,
+                plaintext.clone(),
+            )?;
+        }
+        staged.persist_current()?;
+        *current = staged;
+        Ok(())
+    }
+
+    async fn send_record(&mut self, update: &ControlUpdate) -> Result<()> {
+        self.keys.require_live_traffic(self.peer_id)?;
+        let plaintext = encoding::encode_control_record(&ControlRecord {
+            id: 0,
+            update: update.clone(),
+        })?;
+        let packet = session::seal_packet(&self.keys, self.peer_id, &plaintext)?;
+        send_frame(
+            &mut self.stream,
+            &Frame::new(
+                frame::GCM_PACKET_KIND,
+                encoding::encode_control_packet(&packet)?,
+            )?,
+        )
+        .await
+    }
+
+    async fn finish_submission(&mut self) -> Result<()> {
+        self.drain_live_reply().await?;
+        self.acknowledge_after_drain().await
+    }
+
+    async fn acknowledge_after_drain(&mut self) -> Result<()> {
+        self.keys.require_live_traffic(self.peer_id)?;
+        let through = self.replica.borrow().last_applied();
+        send_control(
+            &mut self.stream,
+            &self.keys,
+            self.peer_id,
+            &NetControl::HeartbeatApplied { through },
+        )
+        .await?;
+        self.drain_live_reply().await.map(|_| ())
+    }
+
+    async fn read_live_packet(&mut self) -> Result<Vec<u8>> {
+        let received = tokio::time::timeout(
+            IDLE_TIMEOUT,
+            read_after_ack(
+                &mut self.stream,
+                self.keys.current_session(self.peer_id)?.epoch,
+            ),
+        )
+        .await
+        .map_err(|_| Error::State("host idle timeout"))??;
+        self.keys.require_live_traffic(self.peer_id)?;
+        if received.kind != frame::GCM_PACKET_KIND {
+            return Err(Error::State("unexpected live frame"));
+        }
+        let packet = encoding::decode_control_packet(&received.payload)?;
+        require_live_header(
+            &packet.header,
+            self.peer_id,
+            self.keys.peer_id()?,
+            &self.keys,
+        )?;
+        session::open_packet(&self.keys, self.peer_id, &packet)
+    }
+
+    /// Returns true only for the heartbeat terminating one ordered reply.
+    fn apply_live_plaintext(&mut self, plaintext: &[u8]) -> Result<bool> {
+        if let Ok(control) = encoding::decode_net_control(plaintext) {
+            return match control {
+                NetControl::Heartbeat => {
+                    if !self.pending_controls.is_empty() {
+                        return Err(Error::AuthenticationFailed);
+                    }
+                    Ok(true)
+                }
+                NetControl::JoinAccepted { vault_id, members } if vault_id == self.vault_id => {
+                    self.apply_member_identities(members)?;
+                    Ok(false)
+                }
+                _ => Err(Error::State("unexpected live reply")),
+            };
+        }
+        let record = encoding::decode_control_record(plaintext)?;
+        self.pending_control_bytes = self
+            .pending_control_bytes
+            .checked_add(plaintext.len())
+            .ok_or(Error::InvalidInput("pending control size overflow"))?;
+        if self.pending_control_bytes > MAX_DRAIN_BYTES
+            || self.pending_controls.len() >= MAX_DRAIN_FRAMES as usize
+        {
+            return Err(Error::InvalidInput("pending control budget exceeded"));
+        }
+        self.pending_controls.push(record);
+        Ok(false)
+    }
+
+    fn apply_member_identities(&mut self, members: Vec<IdentityDocument>) -> Result<()> {
+        let mut ids = BTreeSet::new();
+        for identity in members {
+            identity.verify()?;
+            ids.insert(identity.peer_id);
+            if identity.peer_id != self.keys.peer_id()? {
+                self.keys.import_peer(identity)?;
+            }
+        }
+        self.replica.borrow_mut().add_members(&ids)?;
+        let pending = std::mem::take(&mut self.pending_controls);
+        self.pending_control_bytes = 0;
+        for record in pending {
+            self.replica
+                .borrow_mut()
+                .apply_authenticated_control(record)?;
+        }
+        Ok(())
+    }
+
+    async fn drain_live_reply(&mut self) -> Result<u64> {
+        loop {
+            let plaintext = self.read_live_packet().await?;
+            if self.apply_live_plaintext(&plaintext)? {
+                return Ok(self.replica.borrow().last_applied());
+            }
+        }
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        loop {
+            self.keys.require_live_traffic(self.peer_id)?;
+            let through = self.replica.borrow().last_applied();
+            send_control(
+                &mut self.stream,
+                &self.keys,
+                self.peer_id,
+                &NetControl::HeartbeatApplied { through },
+            )
+            .await?;
+            self.drain_live_reply().await?;
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
     }

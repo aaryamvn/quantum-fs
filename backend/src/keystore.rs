@@ -25,7 +25,7 @@ use crate::{
     Error, Result,
 };
 
-const MAX_STORE_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_STORE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct KeyStore {
@@ -73,6 +73,23 @@ pub(crate) struct PersistedKey {
 }
 
 impl KeyStore {
+    /// Confirms that this live keystore owns the advisory lock for `data_dir`.
+    /// Replica persistence deliberately reuses that lock instead of creating a
+    /// second lock domain.
+    pub(crate) fn require_data_dir_lock(&self, data_dir: &Path) -> Result<()> {
+        let identity_path = self.lock()?.identity_path.clone();
+        let identity_parent = identity_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        if fs::canonicalize(identity_parent)? != fs::canonicalize(data_dir)? {
+            return Err(Error::InvalidInput(
+                "replica data directory differs from keystore lock directory",
+            ));
+        }
+        Ok(())
+    }
+
     /// Exclusively load/create this member and prepare fresh epochs for known
     /// pairs. Canonical signed wraps are available via pending_wraps; no I/O to peers.
     pub fn open(path: &Path) -> Result<Self> {
@@ -403,6 +420,14 @@ impl KeyStore {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn owns_live_gate(&self, peer: PeerId, owner: u64) -> Result<bool> {
+        Ok(self
+            .lock()?
+            .mailbox_gates
+            .get(&peer)
+            .is_some_and(|owners| owners.contains(&owner)))
     }
 
     pub fn require_live_traffic(&self, peer_id: PeerId) -> Result<()> {

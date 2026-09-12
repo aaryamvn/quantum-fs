@@ -49,7 +49,7 @@ fn signed_manifest(
     let chunk_id = chunks
         .lock()
         .map_err(|_| Error::State("test chunk lock poisoned"))?
-        .put(&file_id, 0, plaintext.to_vec());
+        .put(&file_id, 0, plaintext.to_vec())?;
     let mut manifest = Manifest {
         file_id,
         chunk_ids: vec![chunk_id],
@@ -105,7 +105,10 @@ async fn restart_rejoins_reseals_large_queue_and_flushes_before_live() -> Result
             let file_id = FileId([77; 32]);
             let manifest = signed_manifest(&host_keys, &host.borrow(), file_id, plaintext)?;
             host.borrow_mut().host.commit(manifest)?;
-            assert_eq!(host.borrow_mut().host.mailbox(member_id)?.len(), 1_027);
+            host.borrow_mut()
+                .host
+                .link_file(host_id, "/restart-file", file_id)?;
+            assert_eq!(host.borrow_mut().host.mailbox(member_id)?.len(), 1_028);
             assert!(host_keys.require_live_traffic(member_id).is_err());
 
             server.abort();
@@ -148,7 +151,7 @@ async fn restart_rejoins_reseals_large_queue_and_flushes_before_live() -> Result
             assert_eq!(reopened_keys.current_session(member_id)?.epoch, new_epoch);
             reopened_keys.require_live_traffic(member_id)?;
             assert!(resumed.borrow_mut().host.mailbox(member_id)?.is_empty());
-            assert_eq!(replica.borrow().instruction_log().len(), 1_026);
+            assert_eq!(replica.borrow().instruction_log().len(), 1_027);
             let chunks = replica.borrow().chunks();
             let chunk_id = encoding::chunk_id(&file_id, 0, plaintext);
             assert_eq!(

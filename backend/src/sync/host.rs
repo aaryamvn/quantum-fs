@@ -1,5 +1,10 @@
+mod filesystem;
+mod persistence;
+
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    path::Path,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -16,7 +21,12 @@ use crate::{
         packet::{ControlPacket, PacketHeader, PayloadType, PROTOCOL_VERSION},
         pull::ChunkBodyFrame,
     },
-    store::chunks::{ChunkStore, MemoryChunkStore, SharedChunkStore},
+    store::{
+        chunks::{ChunkStore, MemoryChunkStore, SharedChunkStore},
+        durable::DurableStore,
+        replica::ReplicaMetadata,
+        tree::DirectoryTree,
+    },
     sync::pull::{encrypt_at_send, open_chunk},
     Error, Result,
 };
@@ -47,6 +57,22 @@ pub enum ControlUpdate {
     Add(FileId),
     Clear(FileId),
     Remove(FileId),
+    Link {
+        parent: FileId,
+        name: String,
+        child: FileId,
+        is_dir: bool,
+    },
+    Unlink {
+        parent: FileId,
+        name: String,
+    },
+    Rename {
+        src_parent: FileId,
+        src_name: String,
+        dst_parent: FileId,
+        dst_name: String,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -55,8 +81,8 @@ pub struct ControlRecord {
     pub update: ControlUpdate,
 }
 
-#[derive(Clone)]
-enum QueueContent {
+#[derive(Clone, PartialEq, Eq)]
+pub enum QueueContent {
     Control(ControlRecord),
     Chunk {
         file_id: FileId,
@@ -78,9 +104,13 @@ struct OnlineControl {
     queued_at: u64,
 }
 
-/// One vault's volatile state. Contains plaintext/queue metadata, but no KeyStore,
-/// PairSession, or key handle. Moving it across a keystore reopen cannot pin K_ab.
+/// One vault's staged state. In-memory stores support hand-off with into_state.
+/// A durable chunk store holds the keystore lock: drop it before reopening from disk.
+#[derive(Clone)]
 pub struct HostState {
+    expected_root: FileId,
+    tree: DirectoryTree,
+    acked_through: BTreeMap<PeerId, u64>,
     host_id: PeerId,
     members: BTreeSet<PeerId>,
     chunks: SharedChunkStore,
@@ -100,6 +130,7 @@ pub struct HostService {
     presence: BTreeMap<PeerId, Instant>,
     challenges: BTreeMap<PeerId, FlushChallenge>,
     running: bool,
+    defer_persistence: bool,
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -140,6 +171,9 @@ pub struct MemberReplica {
     log: Vec<ControlRecord>,
     receipts: Vec<(MailboxEnvelope, Opened)>,
     online_receipts: Vec<ControlPacket>,
+    expected_root: FileId,
+    tree: DirectoryTree,
+    last_applied: u64,
 }
 
 #[derive(Clone)]
@@ -153,6 +187,7 @@ enum Opened {
 }
 
 struct StagedReplica {
+    tree: DirectoryTree,
     chunks: MemoryChunkStore,
     manifests: BTreeMap<FileId, TrustedManifest>,
     controls: BTreeMap<u64, ControlRecord>,
@@ -169,9 +204,19 @@ impl HostService {
         if !members.contains(&host_id) {
             return Err(Error::InvalidInput("H must be a vault member"));
         }
+        let mut metadata = ReplicaMetadata::new(FileId([0; 32]));
+        metadata.members = members.clone();
+        metadata.dirents = DirectoryTree::new(FileId([0; 32])).dirents();
+        chunks
+            .lock()
+            .map_err(|_| Error::State("chunk store poisoned"))?
+            .set_metadata(metadata);
         Ok(Self {
             keys,
             state: HostState {
+                expected_root: FileId([0; 32]),
+                tree: DirectoryTree::new(FileId([0; 32])),
+                acked_through: BTreeMap::new(),
                 host_id,
                 members,
                 chunks,
@@ -185,6 +230,7 @@ impl HostService {
             presence: BTreeMap::new(),
             challenges: BTreeMap::new(),
             running: true,
+            defer_persistence: false,
         })
     }
 
@@ -198,6 +244,7 @@ impl HostService {
             presence: BTreeMap::new(),
             challenges: BTreeMap::new(),
             running: true,
+            defer_persistence: false,
         };
         // Undelivered live controls become queued catch-up on a replacement host.
         let pending = std::mem::take(&mut host.state.online);
@@ -251,8 +298,9 @@ impl HostService {
         document.verify()?;
         let peer_id = document.peer_id;
         self.keys.import_peer(document)?;
-        self.state.members.insert(peer_id);
-        Ok(())
+        let mut staged = self.stage_state()?;
+        staged.members.insert(peer_id);
+        self.publish_state(staged)
     }
 
     fn require_running(&self) -> Result<()> {
@@ -330,7 +378,13 @@ impl HostService {
             if manifest.writer_id != sender_id {
                 return Err(Error::AuthenticationFailed);
             }
-        } else if sender_id != self.state.host_id {
+        } else if !matches!(
+            update,
+            ControlUpdate::Link { .. }
+                | ControlUpdate::Unlink { .. }
+                | ControlUpdate::Rename { .. }
+        ) && sender_id != self.state.host_id
+        {
             return Err(Error::AuthenticationFailed);
         }
         self.commit_instruction(update.clone())
@@ -341,6 +395,8 @@ impl HostService {
         update: ControlUpdate,
         trusted: Option<TrustedManifest>,
     ) -> Result<()> {
+        filesystem::validate_link_kind(&self.state.manifests, &update)?;
+        let (tree, removed_file) = filesystem::apply_tree_update(&self.state.tree, &update)?;
         self.refresh_mailboxes()?;
         let next = self
             .state
@@ -406,68 +462,65 @@ impl HostService {
                     envelope: control_envelope(&packet, queued_at)?,
                     content: QueueContent::Control(record.clone()),
                 });
-                match &record.update {
-                    ControlUpdate::NewManifest(_) => {
-                        let current = trusted
-                            .as_ref()
-                            .ok_or(Error::State("missing verified commit"))?
-                            .manifest();
-                        // Remove obsolete bodies, never instruction records. A replacement
-                        // is appended at the end so its higher seq cannot precede older seqs.
-                        queue.retain(|entry| match entry.content {
-                            QueueContent::Chunk {
-                                file_id,
+                if let Some(file_id) = removed_file {
+                    queue.retain(|entry| !matches!(entry.content, QueueContent::Chunk {file_id: old, ..} if old == file_id));
+                }
+                if matches!(&record.update, ControlUpdate::NewManifest(_)) {
+                    let current = trusted
+                        .as_ref()
+                        .ok_or(Error::State("missing verified commit"))?
+                        .manifest();
+                    // Remove obsolete bodies, never instruction records. A replacement
+                    // is appended at the end so its higher seq cannot precede older seqs.
+                    queue.retain(|entry| match entry.content {
+                        QueueContent::Chunk {
+                            file_id,
+                            index,
+                            chunk_id,
+                        } if file_id == current.file_id => {
+                            usize::try_from(index)
+                                .ok()
+                                .and_then(|i| current.chunk_ids.get(i))
+                                == Some(&chunk_id)
+                        }
+                        _ => true,
+                    });
+                    let prior = self.state.manifests.get(&current.file_id);
+                    let chunks = self
+                        .state
+                        .chunks
+                        .lock()
+                        .map_err(|_| Error::State("chunk store poisoned"))?;
+                    for (index, &chunk_id) in current.chunk_ids.iter().enumerate() {
+                        let changed = prior.is_none_or(|old| {
+                            old.manifest().chunk_ids.get(index) != Some(&chunk_id)
+                        });
+                        if !changed {
+                            continue;
+                        }
+                        let index = u64::try_from(index)
+                            .map_err(|_| Error::InvalidInput("chunk index overflow"))?;
+                        let plaintext = chunks
+                            .get(&chunk_id)
+                            .ok_or(Error::State("committed plaintext missing"))?;
+                        let frame = encrypt_at_send(
+                            &self.keys,
+                            &session,
+                            current.file_id,
+                            index,
+                            plaintext,
+                        )?;
+                        queue.retain(|entry| !matches!(entry.content,
+                                QueueContent::Chunk {file_id, index: old_index, ..} if file_id == current.file_id && old_index == index));
+                        queue.push_back(Queued {
+                            envelope: chunk_envelope(&frame, queued_at)?,
+                            content: QueueContent::Chunk {
+                                file_id: current.file_id,
                                 index,
                                 chunk_id,
-                            } if file_id == current.file_id => {
-                                usize::try_from(index)
-                                    .ok()
-                                    .and_then(|i| current.chunk_ids.get(i))
-                                    == Some(&chunk_id)
-                            }
-                            _ => true,
+                            },
                         });
-                        let prior = self.state.manifests.get(&current.file_id);
-                        let chunks = self
-                            .state
-                            .chunks
-                            .lock()
-                            .map_err(|_| Error::State("chunk store poisoned"))?;
-                        for (index, &chunk_id) in current.chunk_ids.iter().enumerate() {
-                            let changed = prior.is_none_or(|old| {
-                                old.manifest().chunk_ids.get(index) != Some(&chunk_id)
-                            });
-                            if !changed {
-                                continue;
-                            }
-                            let index = u64::try_from(index)
-                                .map_err(|_| Error::InvalidInput("chunk index overflow"))?;
-                            let plaintext = chunks
-                                .get(&chunk_id)
-                                .ok_or(Error::State("committed plaintext missing"))?;
-                            let frame = encrypt_at_send(
-                                &self.keys,
-                                &session,
-                                current.file_id,
-                                index,
-                                plaintext,
-                            )?;
-                            queue.retain(|entry| !matches!(entry.content,
-                                QueueContent::Chunk {file_id, index: old_index, ..} if file_id == current.file_id && old_index == index));
-                            queue.push_back(Queued {
-                                envelope: chunk_envelope(&frame, queued_at)?,
-                                content: QueueContent::Chunk {
-                                    file_id: current.file_id,
-                                    index,
-                                    chunk_id,
-                                },
-                            });
-                        }
                     }
-                    ControlUpdate::Clear(file_id) | ControlUpdate::Remove(file_id) => {
-                        queue.retain(|entry| !matches!(entry.content, QueueContent::Chunk {file_id: old, ..} if old == *file_id));
-                    }
-                    ControlUpdate::Add(_) => {}
                 }
             }
             Ok(())
@@ -486,28 +539,44 @@ impl HostService {
             }
             return Err(error);
         }
-        match &record.update {
-            ControlUpdate::NewManifest(manifest) => {
-                self.state.manifests.insert(
+        let applied = (|| -> Result<()> {
+            let mut staged = self.stage_state()?;
+            staged.tree = tree;
+            if let ControlUpdate::NewManifest(manifest) = &record.update {
+                staged.manifests.insert(
                     manifest.file_id,
                     trusted.ok_or(Error::State("missing trusted commit"))?,
                 );
             }
-            ControlUpdate::Clear(file_id) | ControlUpdate::Remove(file_id) => {
-                self.state
+            if let Some(file_id) = removed_file {
+                staged
                     .chunks
                     .lock()
                     .map_err(|_| Error::State("chunk store poisoned"))?
-                    .remove_file(file_id);
-                self.state.manifests.remove(file_id);
+                    .remove_file(&file_id);
+                staged.manifests.remove(&file_id);
             }
-            ControlUpdate::Add(_) => {}
+            staged.mailboxes = queues;
+            staged.online = online;
+            staged.acked_through.insert(staged.host_id, record.id);
+            staged.log.push(record);
+            staged.next_control = next;
+            self.publish_state(staged)
+        })();
+        if applied.is_err() {
+            for peer in blocked {
+                if self
+                    .state
+                    .mailboxes
+                    .get(&peer)
+                    .is_none_or(VecDeque::is_empty)
+                {
+                    self.keys
+                        .unblock_live_traffic(peer, self.state.gate_owner)?;
+                }
+            }
         }
-        self.state.mailboxes = queues;
-        self.state.online = online;
-        self.state.log.push(record);
-        self.state.next_control = next;
-        Ok(())
+        applied
     }
 
     pub fn take_online_control(&mut self, recipient: PeerId) -> Result<Vec<ControlPacket>> {
@@ -522,14 +591,16 @@ impl HostService {
                 }
             }
         }
-        Ok(self
-            .state
+        let mut staged = self.stage_state()?;
+        let packets = staged
             .online
             .remove(&recipient)
             .unwrap_or_default()
             .into_iter()
             .map(|entry| entry.packet)
-            .collect())
+            .collect();
+        self.publish_state(staged)?;
+        Ok(packets)
     }
 
     /// Refresh before queue inspection, flush, new commits, or after a daemon rotation.
@@ -633,7 +704,9 @@ impl HostService {
         self.keys
             .block_live_traffic(recipient, self.state.gate_owner)?;
         let sealed = encrypt_at_send(&self.keys, &session, file_id, index, plaintext)?;
-        let queue = self.state.mailboxes.entry(recipient).or_default();
+        drop(chunks);
+        let mut staged = self.stage_state()?;
+        let queue = staged.mailboxes.entry(recipient).or_default();
         queue.retain(|entry| {
             !matches!(entry.content, QueueContent::Chunk {file_id:old,index:old_index,..}
             if old == file_id && old_index == index)
@@ -646,7 +719,18 @@ impl HostService {
                 chunk_id,
             },
         });
-        Ok(())
+        let result = self.publish_state(staged);
+        if result.is_err()
+            && self
+                .state
+                .mailboxes
+                .get(&recipient)
+                .is_none_or(VecDeque::is_empty)
+        {
+            self.keys
+                .unblock_live_traffic(recipient, self.state.gate_owner)?;
+        }
+        result
     }
 
     pub fn issue_flush_challenge(&mut self, recipient: PeerId) -> Result<FlushChallenge> {
@@ -704,7 +788,22 @@ impl HostService {
         if current != prepared.envelopes {
             return Err(Error::State("mailbox changed before flush acknowledgement"));
         }
-        self.state.mailboxes.remove(&peer);
+        let mut staged = self.stage_state()?;
+        let last = staged
+            .mailboxes
+            .get(&peer)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| match &entry.content {
+                QueueContent::Control(record) => Some(record.id),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let ack = staged.acked_through.entry(peer).or_default();
+        *ack = (*ack).max(last);
+        staged.mailboxes.remove(&peer);
+        self.publish_state(staged)?;
         self.challenges.remove(&peer);
         self.keys.unblock_live_traffic(peer, self.state.gate_owner)
     }
@@ -755,6 +854,13 @@ impl MemberReplica {
         if !members.contains(&host_id) || !members.contains(&keys.peer_id()?) {
             return Err(Error::AuthenticationFailed);
         }
+        let mut metadata = ReplicaMetadata::new(FileId([0; 32]));
+        metadata.members = members.clone();
+        metadata.dirents = DirectoryTree::new(FileId([0; 32])).dirents();
+        chunks
+            .lock()
+            .map_err(|_| Error::State("chunk store poisoned"))?
+            .set_metadata(metadata);
         Ok(Self {
             keys,
             host_id,
@@ -765,6 +871,9 @@ impl MemberReplica {
             log: Vec::new(),
             receipts: Vec::new(),
             online_receipts: Vec::new(),
+            expected_root: FileId([0; 32]),
+            tree: DirectoryTree::new(FileId([0; 32])),
+            last_applied: 0,
         })
     }
     pub fn chunks(&self) -> SharedChunkStore {
@@ -786,12 +895,23 @@ impl MemberReplica {
         if !members.contains(&self.host_id) || !members.contains(&self.keys.peer_id()?) {
             return Err(Error::AuthenticationFailed);
         }
-        self.members.extend(members.iter().copied());
+        let mut next = self.members.clone();
+        next.extend(members.iter().copied());
+        let mut staged = self.stage()?;
+        let mut metadata = self.metadata_for(&staged)?;
+        metadata.members = next.clone();
+        staged.chunks.persist_metadata(metadata)?;
+        *self
+            .chunks
+            .lock()
+            .map_err(|_| Error::State("chunk store poisoned"))? = staged.chunks;
+        self.members = next;
         Ok(())
     }
 
     fn stage(&self) -> Result<StagedReplica> {
         Ok(StagedReplica {
+            tree: self.tree.clone(),
             chunks: self
                 .chunks
                 .lock()
@@ -802,14 +922,22 @@ impl MemberReplica {
             log: self.log.clone(),
         })
     }
-    fn apply_staged(&mut self, staged: StagedReplica) -> Result<()> {
+    fn apply_staged(&mut self, mut staged: StagedReplica) -> Result<()> {
+        let metadata = self.metadata_for(&staged)?;
+        staged.chunks.persist_metadata(metadata)?;
+        let last = staged
+            .log
+            .last()
+            .map_or(self.last_applied, |record| record.id);
         *self
             .chunks
             .lock()
             .map_err(|_| Error::State("chunk store poisoned"))? = staged.chunks;
+        self.tree = staged.tree;
         self.manifests = staged.manifests;
         self.controls = staged.controls;
         self.log = staged.log;
+        self.last_applied = last;
         Ok(())
     }
     fn stage_control(&self, staged: &mut StagedReplica, record: &ControlRecord) -> Result<bool> {
@@ -827,17 +955,17 @@ impl MemberReplica {
         {
             return Err(Error::State("host instructions arrived out of order"));
         }
-        match &record.update {
-            ControlUpdate::NewManifest(manifest) => {
-                let trusted = TrustedManifest::verify(manifest.clone(), &self.keys, &self.members)?;
-                staged.manifests.insert(trusted.manifest().file_id, trusted);
-            }
-            ControlUpdate::Clear(file_id) | ControlUpdate::Remove(file_id) => {
-                staged.chunks.remove_file(file_id);
-                staged.manifests.remove(file_id);
-            }
-            ControlUpdate::Add(_) => {}
+        filesystem::validate_link_kind(&staged.manifests, &record.update)?;
+        let (tree, removed_file) = filesystem::apply_tree_update(&staged.tree, &record.update)?;
+        if let ControlUpdate::NewManifest(manifest) = &record.update {
+            let trusted = TrustedManifest::verify(manifest.clone(), &self.keys, &self.members)?;
+            staged.manifests.insert(trusted.manifest().file_id, trusted);
         }
+        if let Some(file_id) = removed_file {
+            staged.chunks.remove_file(&file_id);
+            staged.manifests.remove(&file_id);
+        }
+        staged.tree = tree;
         staged.controls.insert(record.id, record.clone());
         staged.log.push(record.clone());
         Ok(true)
@@ -989,8 +1117,11 @@ impl MemberReplica {
             {
                 continue;
             }
+            if !staged.tree.is_linked_file(&file_id) {
+                continue;
+            }
             if !staged.chunks.has(&id) {
-                staged.chunks.put(&file_id, index, plaintext);
+                staged.chunks.put(&file_id, index, plaintext)?;
                 report.chunks_written += 1;
             }
         }
@@ -1171,13 +1302,14 @@ mod tests {
             replica_chunks.clone(),
         )?;
         let file_id = FileId([71; 32]);
+        host.link_file(host_id, "file", file_id)?;
         let ids = {
             let mut chunks = chunks
                 .lock()
                 .map_err(|_| Error::State("test lock poisoned"))?;
             vec![
-                chunks.put(&file_id, 0, b"first".to_vec()),
-                chunks.put(&file_id, 1, b"second".to_vec()),
+                chunks.put(&file_id, 0, b"first".to_vec())?,
+                chunks.put(&file_id, 1, b"second".to_vec())?,
             ]
         };
         let mut manifest = Manifest {
@@ -1231,7 +1363,7 @@ mod tests {
         assert!(replica.trusted_manifest(&file_id).is_none());
         assert!(host_keys.require_live_traffic(member_id).is_err());
         assert!(member_keys.require_live_traffic(host_id).is_err());
-        assert_eq!(replica.receipts.len(), 2); // first control and first body were authenticated
+        assert_eq!(replica.receipts.len(), 3); // link, manifest and first body authenticated
         host.state
             .mailboxes
             .get_mut(&member_id)
@@ -1244,7 +1376,7 @@ mod tests {
         assert_eq!(
             report,
             FlushReport {
-                controls: 1,
+                controls: 2,
                 chunks_written: 2
             }
         );

@@ -6,12 +6,14 @@ use std::{
 use crate::{
     encoding,
     ids::{ChunkId, FileId},
+    store::{durable::DurableStore, replica::ReplicaMetadata},
+    Result,
 };
 
 /// A v1 member is in the TCB for plaintext it stores. Zeroization is for keys,
 /// not file bytes.
 pub trait ChunkStore {
-    fn put(&mut self, file_id: &FileId, index: u64, plaintext: Vec<u8>) -> ChunkId;
+    fn put(&mut self, file_id: &FileId, index: u64, plaintext: Vec<u8>) -> Result<ChunkId>;
     fn get(&self, chunk_id: &ChunkId) -> Option<&[u8]>;
     fn has(&self, chunk_id: &ChunkId) -> bool;
 
@@ -40,9 +42,11 @@ pub fn shared_chunk_store() -> SharedChunkStore {
     Arc::new(Mutex::new(MemoryChunkStore::new()))
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct MemoryChunkStore {
-    chunks: BTreeMap<ChunkId, ChunkRecord>,
+    chunks: BTreeMap<ChunkId, Arc<ChunkRecord>>,
+    durable: Option<DurableStore>,
+    metadata: Option<ReplicaMetadata>,
 }
 
 impl MemoryChunkStore {
@@ -51,7 +55,79 @@ impl MemoryChunkStore {
     }
 
     pub fn get_record(&self, chunk_id: &ChunkId) -> Option<&ChunkRecord> {
-        self.chunks.get(chunk_id)
+        self.chunks.get(chunk_id).map(Arc::as_ref)
+    }
+
+    pub(crate) fn from_records(
+        chunks: BTreeMap<ChunkId, Arc<ChunkRecord>>,
+        durable: DurableStore,
+    ) -> Self {
+        Self {
+            chunks,
+            durable: Some(durable),
+            metadata: None,
+        }
+    }
+
+    pub(crate) fn set_metadata(&mut self, metadata: ReplicaMetadata) {
+        self.metadata = Some(metadata);
+    }
+
+    pub fn metadata(&self) -> Option<ReplicaMetadata> {
+        self.metadata.clone()
+    }
+
+    pub fn accepts_file(&self, file_id: &FileId) -> bool {
+        self.metadata.as_ref().is_some_and(|metadata| {
+            metadata.manifests.contains_key(file_id)
+                && metadata
+                    .dirents
+                    .iter()
+                    .any(|entry| entry.child == *file_id && !entry.is_dir)
+        })
+    }
+
+    pub fn accepts_chunk(&self, file_id: &FileId, index: u64, chunk_id: &ChunkId) -> bool {
+        let Ok(index) = usize::try_from(index) else {
+            return false;
+        };
+        self.metadata.as_ref().is_some_and(|metadata| {
+            if !metadata
+                .dirents
+                .iter()
+                .any(|entry| entry.child == *file_id && !entry.is_dir)
+            {
+                return false;
+            }
+            metadata
+                .manifests
+                .get(file_id)
+                .and_then(|manifest| manifest.chunk_ids.get(index))
+                == Some(chunk_id)
+        })
+    }
+
+    pub fn persist_metadata(&mut self, metadata: ReplicaMetadata) -> Result<()> {
+        if let Some(durable) = self.durable.clone() {
+            self.metadata = Some(durable.persist(&metadata, &mut self.chunks)?);
+        } else {
+            self.metadata = Some(metadata);
+        }
+        Ok(())
+    }
+
+    pub fn persist_current(&mut self) -> Result<()> {
+        let Some(metadata) = self.metadata() else {
+            return Ok(());
+        };
+        self.persist_metadata(metadata)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_persist(&self) {
+        if let Some(durable) = &self.durable {
+            durable.fail_next_persist();
+        }
     }
 
     pub fn remove_file(&mut self, file_id: &FileId) {
@@ -68,17 +144,23 @@ impl MemoryChunkStore {
 }
 
 impl ChunkStore for MemoryChunkStore {
-    fn put(&mut self, file_id: &FileId, index: u64, plaintext: Vec<u8>) -> ChunkId {
+    fn put(&mut self, file_id: &FileId, index: u64, plaintext: Vec<u8>) -> Result<ChunkId> {
         let chunk_id = encoding::chunk_id(file_id, index, &plaintext);
+        if self.chunks.contains_key(&chunk_id) {
+            return Ok(chunk_id);
+        }
+        if let Some(durable) = &self.durable {
+            durable.write_chunk(&chunk_id, &plaintext)?;
+        }
         self.chunks.insert(
             chunk_id,
-            ChunkRecord {
+            Arc::new(ChunkRecord {
                 file_id: *file_id,
                 index,
                 plaintext,
-            },
+            }),
         );
-        chunk_id
+        Ok(chunk_id)
     }
 
     fn get(&self, chunk_id: &ChunkId) -> Option<&[u8]> {
@@ -100,7 +182,9 @@ mod tests {
     #[test]
     fn stores_plaintext_and_reports_have_vector_in_request_order() {
         let mut store = MemoryChunkStore::new();
-        let present = store.put(&FileId([3; 32]), 7, b"plaintext".to_vec());
+        let present = store
+            .put(&FileId([3; 32]), 7, b"plaintext".to_vec())
+            .unwrap();
         let absent = ChunkId([9; 32]);
 
         assert!(store.has(&present));

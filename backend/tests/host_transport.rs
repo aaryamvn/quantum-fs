@@ -77,7 +77,7 @@ fn signed_manifest(
     let id = chunks
         .lock()
         .map_err(|_| quantam_fs::Error::State("test chunk lock poisoned"))?
-        .put(&file_id, 0, plaintext.to_vec());
+        .put(&file_id, 0, plaintext.to_vec())?;
     let mut manifest = Manifest {
         file_id,
         chunk_ids: vec![id],
@@ -141,6 +141,7 @@ fn transport_flush_is_staged_and_only_exact_acknowledgement_clears_queue() -> qu
         b"first",
         1,
     )?)?;
+    host.link_file(host_id, "/file", file_id)?;
     let challenge = host.issue_flush_challenge(member_id)?;
     let signature = flush_signature(&member_keys, &challenge)?;
     let first_host = host.prepare_flush(member_id, &challenge, &signature)?;
@@ -150,7 +151,7 @@ fn transport_flush_is_staged_and_only_exact_acknowledgement_clears_queue() -> qu
         .map_err(|_| quantam_fs::Error::State("test chunk lock poisoned"))?
         .is_empty());
     let first_report = replica.commit_prepared(first_replica)?;
-    assert_eq!(first_report.controls, 1);
+    assert_eq!(first_report.controls, 2);
     assert_eq!(first_report.chunks_written, 1);
 
     host.commit(signed_manifest(

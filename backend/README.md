@@ -57,7 +57,11 @@ There is one `qfsd` binary, including directory mode.
 A member creates or verifies independent X-Wing and ML-DSA-65 identity keys.
 The identity file contains private seeds and its signed public document;
 `.keys` and `.lock` siblings hold pair state and an exclusive process lock.
-The `vault` file persists the vault id, current code, membership and ad timestamp.
+The `vault` file persists the vault id, current code and ad timestamp (with a
+compatibility member list); `replica.bin` is authoritative for replica membership.
+Joined members and hosts load their durable replica before serving file operations.
+The identity file must be in the configured data directory so its existing lock
+protects that replica. A second open of the same identity fails.
 Directory mode writes `directory.bin` and its lock, without constructing a
 `KeyStore` or `HostService`. Private files use owner-only Unix permissions and
 atomic replacement; keys are not encrypted at rest. See
@@ -114,6 +118,14 @@ flush authentication, more than 1024 queued bodies, and atomic failed-drain retr
 TCP tests cover actual daemon processes, directory replay/tampering, code rotation,
 provisional cleanup, cached WrapAck retry, pre-GCM wire capture, corrupted queued
 frames and reconnect re-sealing across a keystore reopen with retained memory state.
+Durable tests cover process-state loss and reopen, metadata-only snapshot size,
+complete-file corruption, corrupt chunk discard, mailbox pins, orphan cleanup,
+write-failure atomicity, acknowledgments and root binding. Tree tests cover member
+writers, restart, strict UTF-8 paths, byte-exact names, cycle/uniqueness checks,
+serialized renames and unlink during an in-flight pull. Locate tests cover H-first
+selection, member fallback, bounded concurrent discovery and exact have replies.
+TCP tests also cover member path operations, atomic failed saves, have queries,
+trusted pulls and more than 1024 queued online controls before a fresh reply.
 
 ## Layout and implementation boundary
 
@@ -128,22 +140,31 @@ frames and reconnect re-sealing across a keystore reopen with retained memory st
 - `src/protocol/{packet,manifest,pull}.rs`: headers, manifests, bounded pull
   requests, and per-peer/epoch/direction/type sliding-window acceptance (W=1024).
   Authentication must succeed before a receive counter is marked accepted.
-- `src/store/chunks.rs`: in-memory plaintext put/get/has and have-bitset, retaining
-  file/index metadata for canonical chunk AAD. No durable chunk storage.
+- `src/store/{chunks,durable,replica,tree}.rs`: fallible plaintext put/get/has,
+  request-order have-bitsets, immutable chunk files, authenticated metadata
+  snapshots and directory entries. Staging shares immutable chunk records rather
+  than copying their plaintext.
 - `src/sync/pull.rs`: in-process bounded pull, encrypted control requests and one
   AES-GCM chunk body per response. Holders skip missing IDs. Acceptance uses a
-  pre-trusted manifest from H, checks GCM and the plaintext chunk hash, and writes
-  idempotently; a failed response batch writes no chunks.
-- `src/sync/host.rs`: vault membership, heartbeat/TTL presence, member-writer
+  pre-trusted manifest from H, checks GCM and the plaintext chunk hash, then
+  rechecks the current manifest and live file link under the store lock. Accepted
+  batches persist before becoming visible; unlink cannot resurrect via a stale pull.
+- `src/sync/locate.rs`, `src/protocol/locate.rs`: prefer a live, ungated pair to H;
+  otherwise query live member pairs for exactly the requested 1–32 IDs. Async
+  queries run concurrently with a five-second overall deadline. The `qfs/v1/have/`
+  prefix is separate from instruction kinds; replies never supply manifest trust
+  and locations are never stored in the directory or replica snapshot.
+- `src/sync/host.rs` and `src/sync/host/{persistence,filesystem}.rs`: durable
+  vault membership, heartbeat/TTL presence, member-writer
   signature verification, online control-only fan-out, and immediate offline
   chunk encryption. Bodies coalesce by file/index; all control instructions
   remain ordered. Recipient-only ML-DSA challenge authentication drains the queue.
   H is TCB for all shared plaintext; live cursors go direct pairwise GCM,
   without DSA or H. A stopped host rejects commits.
 
-- `src/net/{frame,directory,session,join}.rs`: bounded versioned TCP frames,
-  signed directory, peer handshake, single-vault admission, heartbeat/control
-  delivery and adapters for the existing atomic mailbox staging. Frame bodies
+- `src/net/{frame,directory,session,join,locate}.rs`: bounded versioned TCP frames,
+  signed directory, peer handshake, single-vault admission, member commits,
+  have queries, pulls and adapters for the existing atomic mailbox staging. Frame bodies
   over 1 MiB, unknown types and unknown versions close the connection.
 
 Crypto callers import verified peer documents before creating wraps. First
@@ -167,14 +188,53 @@ The transport prepares old counters before opening that newer end marker.
 Both pull and host use the same encrypt-at-send helper and the existing packet
 and chunk counter domains on K_ab.
 
-`HostService::into_state` / `resume` support a memory-state hand-off across a
-keystore reopen without retaining old keys. Mailboxes and plaintext are volatile:
-an actual process exit loses them. Durable recovery is not implemented.
+`data_dir/chunks/<64 lowercase hex chunk_id>` holds immutable plaintext only,
+up to 1 MiB per chunk. `data_dir/replica.bin` holds the root, tree, members,
+writer-signed manifests, ordered instructions, mailbox content references,
+acknowledgment watermarks and chunk index; it never contains chunk bodies or GCM
+envelopes. Its versioned header, generation, length and SHA-256 reject complete-file
+corruption before body parsing. Atomic replacement uses the keystore's existing
+file/parent fsync protocol and 16 MiB metadata cap. A metadata operation rewrites
+metadata, not the vault's plaintext. Chunks remain unencrypted at rest.
 
-Still left: durable chunks/mailboxes, path/tree filesystem behavior, kick,
-multi-vault hosting and client GUI integration. Pull and commit orchestration
-remain available in-process; the current TCP application loop handles admission,
-mailbox catch-up, heartbeat and host control delivery. There is no CLI file-transfer
-or filesystem interface yet. Static ek rotation does not provide forward secrecy.
+`HostService::open_durable` and `MemberReplica::open_durable` recover those files
+under the live keystore lock. The root is `FileId(vault_id.0)`, or zero without a
+vault; another root is rejected. Changing a zero-root store to a vault requires an
+explicit one-time metadata migration. Invalid chunk hashes are discarded; missing
+mailbox-pinned chunks make reopen fail closed. Successful snapshots sweep orphans
+and unreferenced chunks. Clear/unlink/remove release their queued chunk pins.
+All current members, including H, must acknowledge a log prefix before it is
+truncated; a missing acknowledgment pins it. Online apply watermarks use the
+existing GCM heartbeat, and flush uses its existing batch acknowledgment.
+
+H exposes `mkdir`, `link_file`, `save_file`, `unlink` and `rename`. Every current
+member may mutate any path; NewManifest still binds its writer to the authenticated
+sender. H serializes arrivals, so a later operation resolves against the earlier
+result and can fail if its source moved. Names are byte-exact and case-sensitive,
+with no Unicode normalization. Paths use the vault root (an optional leading `/`),
+reject dot/dot-dot, NUL, backslashes, drive prefixes and empty components, and are
+limited to 255 bytes per component and 4096 bytes overall. Nonempty directory
+unlink and moves into descendants fail. Deprecated Add remains a no-op.
+
+New-file saves prepare their manifest and Link together and publish one durable
+snapshot before returning controls. `JoinedPeer::{mkdir,save_file,unlink,rename}`
+send those operations to H over the existing GCM frames. Uploads are bounded to
+64 MiB of staged plaintext per connection; individual wire frames also include
+headers and the GCM tag within the 1 MiB frame cap. Use smaller chunks, such as
+512 KiB, for TCP uploads. `JoinedPeer::{have_query,pull}` support host discovery
+and trusted pulls; `net::locate::{query_over_stream,serve_have_once}` supports
+queries on already-established member pairs. Peer session establishment still
+uses the existing handshake. There is no CLI filesystem command or OS mount.
+
+Queued ciphertext is rebuilt from durable control records and pinned plaintext
+after restart; active pair keys and counters are never reloaded for reuse.
+Finish the live wrap, refresh/re-seal, and flush before live traffic. Online
+control packets are also authenticated in counter order before newer membership
+or have replies, preserving W=1024. `into_state`/`resume` remains available for
+memory-only hand-offs; durable handles hold the keystore lock and must be dropped
+before reopening from disk.
+
+Still left: kick, multi-vault hosting, storage eviction, successor election and
+client GUI integration. Static ek rotation does not provide forward secrecy.
 There is no per-packet DSA, second content key, per-peer ciphertext chunk replica,
 or random stored chunk nonce.

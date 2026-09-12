@@ -6,6 +6,7 @@ use crate::{keystore::random_bytes, Error, Result};
 pub mod directory;
 pub mod frame;
 pub mod join;
+pub mod locate;
 pub mod session;
 
 const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

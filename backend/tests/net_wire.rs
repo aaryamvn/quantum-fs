@@ -116,7 +116,7 @@ async fn relay(
         let mut frame = match read_frame(&mut reader).await {
             Ok(frame) => frame,
             Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Ok(())
+                return Ok(());
             }
             Err(error) => return Err(error),
         };
@@ -196,7 +196,7 @@ fn signed_two_chunk_manifest(
     let chunk_ids = plaintexts
         .iter()
         .map(|(index, plaintext)| store.put(&file_id, *index, plaintext.clone()))
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     drop(store);
     let mut manifest = Manifest {
         file_id,
@@ -294,7 +294,10 @@ async fn corrupted_second_chunk_keeps_atomic_replica_and_retries_same_mailbox() 
             let (manifest, plaintexts) =
                 signed_two_chunk_manifest(&host_keys, &host.borrow(), file_id)?;
             host.borrow_mut().host.commit(manifest)?;
-            assert_eq!(host.borrow_mut().host.mailbox(member_id)?.len(), 3);
+            host.borrow_mut()
+                .host
+                .link_file(host_keys.peer_id()?, "/file", file_id)?;
+            assert_eq!(host.borrow_mut().host.mailbox(member_id)?.len(), 4);
 
             let corrupting = proxy(target, true).await?;
             let proxy_ad = DirectoryAd::sign(
@@ -312,7 +315,7 @@ async fn corrupted_second_chunk_keeps_atomic_replica_and_retries_same_mailbox() 
 
             assert!(replica.borrow().instruction_log().is_empty());
             assert_eq!(replica.borrow().chunks().lock().unwrap().len(), 0);
-            assert_eq!(host.borrow_mut().host.mailbox(member_id)?.len(), 3);
+            assert_eq!(host.borrow_mut().host.mailbox(member_id)?.len(), 4);
             assert!(host_keys.require_live_traffic(member_id).is_err());
             assert!(member_keys
                 .require_live_traffic(host_keys.peer_id()?)
@@ -321,7 +324,7 @@ async fn corrupted_second_chunk_keeps_atomic_replica_and_retries_same_mailbox() 
             corrupting.task.abort();
             let retried =
                 join_host(member_keys.clone(), &direct_ad, code, Some(replica.clone())).await?;
-            assert_eq!(replica.borrow().instruction_log().len(), 1);
+            assert_eq!(replica.borrow().instruction_log().len(), 2);
             let chunks = replica.borrow().chunks();
             let chunks = chunks.lock().unwrap();
             for (index, plaintext) in plaintexts {

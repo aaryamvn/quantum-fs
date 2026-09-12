@@ -112,14 +112,14 @@ fn pull_uses_host_trust_and_encrypts_the_same_chunk_differently_per_recipient(
     let (chunk_id, host_chunk_id) = {
         let mut chunks = host_chunks.lock().unwrap();
         (
-            chunks.put(&file_id, 0, plaintext.clone()),
-            chunks.put(&file_id, 1, host_plaintext.clone()),
+            chunks.put(&file_id, 0, plaintext.clone())?,
+            chunks.put(&file_id, 1, host_plaintext.clone())?,
         )
     };
     holder_chunks
         .lock()
         .unwrap()
-        .put(&file_id, 0, plaintext.clone());
+        .put(&file_id, 0, plaintext.clone())?;
 
     let mut host = HostService::new(host_keys.clone(), members.clone(), host_chunks.clone())?;
     host.heartbeat(requester_id, Duration::from_secs(60))?;
@@ -129,6 +129,7 @@ fn pull_uses_host_trust_and_encrypts_the_same_chunk_differently_per_recipient(
         vec![chunk_id, host_chunk_id],
         (plaintext.len() + host_plaintext.len()) as u64,
     )?)?;
+    host.link_file(host_id, "/file", file_id)?;
     let mut requester = MemberReplica::new(
         requester_keys.clone(),
         host_id,
@@ -200,10 +201,11 @@ fn tampered_body_causes_no_store_write() -> quantam_fs::Result<()> {
     host_chunks
         .lock()
         .unwrap()
-        .put(&file_id, 0, plaintext.to_vec());
+        .put(&file_id, 0, plaintext.to_vec())?;
     let mut host = HostService::new(sender.clone(), members.clone(), host_chunks)?;
     host.heartbeat(receiver.peer_id()?, Duration::from_secs(60))?;
     host.commit(manifest)?;
+    host.link_file(sender.peer_id()?, "/file", file_id)?;
     let destination = shared_chunk_store();
     let mut replica = MemberReplica::new(
         receiver.clone(),
@@ -249,7 +251,7 @@ fn authenticated_wrong_index_and_plaintext_hash_cause_no_store_write() -> quanta
     host_chunks
         .lock()
         .unwrap()
-        .put(&file_id, 0, expected_plaintext.to_vec());
+        .put(&file_id, 0, expected_plaintext.to_vec())?;
     let mut host = HostService::new(sender.clone(), members.clone(), host_chunks)?;
     host.heartbeat(receiver.peer_id()?, Duration::from_secs(60))?;
     host.commit(signed_manifest(
@@ -258,6 +260,7 @@ fn authenticated_wrong_index_and_plaintext_hash_cause_no_store_write() -> quanta
         vec![expected_id],
         expected_plaintext.len() as u64,
     )?)?;
+    host.link_file(sender.peer_id()?, "/file", file_id)?;
     let destination = shared_chunk_store();
     let mut replica = MemberReplica::new(
         receiver.clone(),
@@ -333,5 +336,56 @@ fn host_rejects_bad_signature_and_signed_nonmember_before_manifest_apply() -> qu
     assert!(host.trusted_manifest(&outsider_file).is_none());
     assert!(host.take_online_control(member.peer_id()?)?.is_empty());
     assert!(host.chunks().lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[test]
+fn pull_started_before_remove_cannot_resurrect_the_chunk() -> quantam_fs::Result<()> {
+    let directory = TestDir::new()?;
+    let host_keys = directory.keys("host")?;
+    let member_keys = directory.keys("member")?;
+    connect(&host_keys, &member_keys)?;
+    let host_id = host_keys.peer_id()?;
+    let member_id = member_keys.peer_id()?;
+    let members = BTreeSet::from([host_id, member_id]);
+    let host_chunks = shared_chunk_store();
+    let member_chunks = shared_chunk_store();
+    let file_id = FileId([42; 32]);
+    let plaintext = b"removed while pull is in flight";
+    let chunk_id = host_chunks
+        .lock()
+        .map_err(|_| quantam_fs::Error::State("test chunk lock poisoned"))?
+        .put(&file_id, 0, plaintext.to_vec())?;
+
+    let mut host = HostService::new(host_keys.clone(), members.clone(), host_chunks.clone())?;
+    host.heartbeat(member_id, Duration::from_secs(60))?;
+    host.commit(signed_manifest(
+        &host_keys,
+        file_id,
+        vec![chunk_id],
+        plaintext.len() as u64,
+    )?)?;
+    host.link_file(host_id, "/file", file_id)?;
+    let mut member =
+        MemberReplica::new(member_keys.clone(), host_id, members, member_chunks.clone())?;
+    for control in host.take_online_control(member_id)? {
+        member.apply_control(&control)?;
+    }
+    let stale_trust = member.trusted_manifest(&file_id).unwrap().clone();
+    let holder = InProcessPullCoordinator::new(host_keys.clone(), host_chunks);
+    let response = holder.serve(&PullRequest::new(vec![chunk_id])?, member_id)?;
+
+    host.unlink(host_id, "/file")?;
+    for control in host.take_online_control(member_id)? {
+        member.apply_control(&control)?;
+    }
+    assert!(member.trusted_manifest(&file_id).is_none());
+
+    let pull = InProcessPullCoordinator::new(member_keys, member_chunks.clone());
+    assert_eq!(pull.accept(&response, &stale_trust)?, 0);
+    assert!(member_chunks
+        .lock()
+        .map_err(|_| quantam_fs::Error::State("test chunk lock poisoned"))?
+        .is_empty());
     Ok(())
 }

@@ -14,7 +14,6 @@ use crate::{
         directory::{serve as serve_directory, DirectoryClient, DirectoryStore},
         join::{join_host, serve_host, unix_time, VaultHost},
     },
-    store::chunks::shared_chunk_store,
     sync::host::{HostService, MemberReplica},
     Error, Result,
 };
@@ -57,7 +56,8 @@ async fn run_inner(config: Config) -> Result<()> {
             "--create-vault requires --directory-addr",
         ))?;
         let advertised = config.advertise_addr.unwrap_or(local_addr);
-        let mut vault = VaultHost::load_or_create(keys, &config.data_dir.join("vault"))?;
+        let mut vault =
+            VaultHost::open_durable(keys, &config.data_dir.join("vault"), &config.data_dir)?;
         vault
             .publish(&DirectoryClient::new(directory_addr), advertised)
             .await?;
@@ -76,6 +76,7 @@ async fn run_inner(config: Config) -> Result<()> {
             keys,
             DirectoryClient::new(directory_addr),
             code,
+            &config.data_dir,
             &mut shutdown,
         )
         .await;
@@ -83,10 +84,11 @@ async fn run_inner(config: Config) -> Result<()> {
 
     let role = member_role(&identity.peer_id, host_id.as_ref());
     let host = if role == MemberRole::Host {
-        Some(HostService::new(
+        Some(HostService::open_durable(
             keys.clone(),
+            &config.data_dir,
+            crate::ids::FileId([0; 32]),
             [identity.peer_id].into(),
-            shared_chunk_store(),
         )?)
     } else {
         None
@@ -142,6 +144,7 @@ async fn run_member(
     keys: KeyStore,
     directory: DirectoryClient,
     code: crate::net::JoinCode,
+    data_dir: &std::path::Path,
     shutdown: &mut Shutdown,
 ) -> Result<()> {
     let mut replica: Option<Rc<RefCell<MemberReplica>>> = None;
@@ -153,11 +156,12 @@ async fn run_member(
                 .ok_or(Error::InvalidInput("join code not found"))?;
             ad.verify(unix_time()?)?;
             if replica.is_none() {
-                replica = Some(Rc::new(RefCell::new(MemberReplica::new(
+                replica = Some(Rc::new(RefCell::new(MemberReplica::open_durable(
                     keys.clone(),
+                    data_dir,
+                    crate::ids::FileId(ad.vault_id.0),
                     ad.peer_id,
                     BTreeSet::from([keys.peer_id()?, ad.peer_id]),
-                    shared_chunk_store(),
                 )?)));
             }
             join_host(keys.clone(), &ad, code, replica.clone()).await

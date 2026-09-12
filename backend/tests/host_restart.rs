@@ -72,7 +72,7 @@ fn signed_manifest(
     let chunk_id = chunks
         .lock()
         .map_err(|_| quantam_fs::Error::State("test chunk lock poisoned"))?
-        .put(&file_id, 0, plaintext.to_vec());
+        .put(&file_id, 0, plaintext.to_vec())?;
     let mut manifest = Manifest {
         file_id,
         chunk_ids: vec![chunk_id],
@@ -119,15 +119,17 @@ fn restart_rewraps_reseals_and_flushes_memory_host_state() -> quantam_fs::Result
         b"before delete",
         1,
     )?)?;
+    host.link_file(host_id, "/file", file_id)?;
     host.fan_out_control(host_id, &ControlUpdate::Remove(file_id))?;
     let latest = b"after recreate";
     let latest_manifest = signed_manifest(&host_keys, file_id, &host_chunks, latest, 2)?;
     let latest_id = latest_manifest.chunk_ids[0];
     host.commit(latest_manifest)?;
+    host.link_file(host_id, "/file", file_id)?;
 
-    assert_eq!(host.instruction_log().len(), 3);
+    assert_eq!(host.instruction_log().len(), 5);
     let before_restart = host.mailbox(offline_id)?;
-    assert_eq!(count_frames(&before_restart)?, (3, 1));
+    assert_eq!(count_frames(&before_restart)?, (5, 1));
     assert!(before_restart.iter().all(|entry| entry.epoch == Epoch(1)));
 
     let state = host.into_state();
@@ -141,7 +143,7 @@ fn restart_rewraps_reseals_and_flushes_memory_host_state() -> quantam_fs::Result
 
     let mut restarted = HostService::resume(restarted_keys, state)?;
     let resealed = restarted.mailbox(offline_id)?;
-    assert_eq!(count_frames(&resealed)?, (3, 1));
+    assert_eq!(count_frames(&resealed)?, (5, 1));
     assert!(resealed.iter().all(|entry| entry.epoch == Epoch(2)));
     let body = resealed
         .iter()
@@ -161,9 +163,9 @@ fn restart_rewraps_reseals_and_flushes_memory_host_state() -> quantam_fs::Result
         &encoding::flush_m(&challenge),
     )?;
     let report = restarted.flush_mailbox(&mut offline, &challenge, &signature)?;
-    assert_eq!(report.controls, 3);
+    assert_eq!(report.controls, 5);
     assert_eq!(report.chunks_written, 1);
-    assert_eq!(offline.instruction_log().len(), 3);
+    assert_eq!(offline.instruction_log().len(), 5);
     assert_eq!(
         offline_chunks
             .lock()

@@ -20,11 +20,13 @@ use crate::{
         JoinCode, VaultId,
     },
     protocol::{
+        locate::{require_count as require_have_count, HaveQuery, HaveReply, HAVE_MAGIC},
         manifest::Manifest,
         packet::{ControlPacket, PacketHeader, PayloadType},
         pull::{ChunkBodyFrame, PullRequest, MAX_PULL_CHUNK_IDS},
     },
-    sync::host::{ControlRecord, ControlUpdate, FlushChallenge, MailboxEnvelope},
+    store::{replica::ReplicaMetadata, tree::DirectoryTree},
+    sync::host::{ControlRecord, ControlUpdate, FlushChallenge, MailboxEnvelope, QueueContent},
     Error, Result,
 };
 
@@ -35,7 +37,9 @@ const LOCAL_IDENTITY_MAGIC: &[u8] = b"qfs/local/identity/";
 const STORE_STATE_MAGIC: &[u8] = b"qfs/local/keys/";
 const DIRECTORY_STATE_MAGIC: &[u8] = b"qfs/local/directory/";
 const VAULT_METADATA_MAGIC: &[u8] = b"qfs/local/vault/";
+const REPLICA_MAGIC: &[u8] = b"qfs/local/replica/";
 const LOCAL_FORMAT_VERSION: u8 = 1;
+const MAX_REPLICA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DIRECTORY_RECORDS: usize = 10_000;
 
 pub fn peer_id(vk: &[u8]) -> PeerId {
@@ -441,6 +445,10 @@ pub fn encode_net_control(control: &NetControl) -> Result<Vec<u8>> {
         }
         NetControl::Ready => out.push(4),
         NetControl::Heartbeat => out.push(5),
+        NetControl::HeartbeatApplied { through } => {
+            out.push(5);
+            out.extend_from_slice(&through.to_be_bytes());
+        }
     }
     Ok(out)
 }
@@ -462,7 +470,13 @@ pub fn decode_net_control(bytes: &[u8]) -> Result<NetControl> {
             digest: reader.array()?,
         },
         4 => NetControl::Ready,
-        5 => NetControl::Heartbeat,
+        5 => match reader.remaining() {
+            0 => NetControl::Heartbeat,
+            8 => NetControl::HeartbeatApplied {
+                through: reader.u64()?,
+            },
+            _ => return Err(Error::InvalidInput("invalid heartbeat control length")),
+        },
         _ => {
             return Err(Error::InvalidInput(
                 "unknown encrypted network control kind",
@@ -715,6 +729,89 @@ pub fn decode_pull_request(bytes: &[u8]) -> Result<PullRequest> {
     PullRequest::new(chunk_ids)
 }
 
+pub fn encode_have_query(query: &HaveQuery) -> Result<Vec<u8>> {
+    require_have_count(query.chunk_ids().len())?;
+    let mut out = Vec::with_capacity(HAVE_MAGIC.len() + 1 + 32 + 4 + 32 * query.chunk_ids().len());
+    out.extend_from_slice(HAVE_MAGIC);
+    out.push(1);
+    out.extend_from_slice(&query.file_id.0);
+    push_length(&mut out, query.chunk_ids().len())?;
+    for chunk_id in query.chunk_ids() {
+        out.extend_from_slice(&chunk_id.0);
+    }
+    Ok(out)
+}
+
+pub fn decode_have_query(bytes: &[u8]) -> Result<HaveQuery> {
+    let mut reader = Reader::new(bytes);
+    reader.require_prefix(HAVE_MAGIC)?;
+    if reader.byte()? != 1 {
+        return Err(Error::InvalidInput("invalid have query kind"));
+    }
+    let file_id = FileId(reader.array()?);
+    let count = usize::try_from(reader.u32()?)
+        .map_err(|_| Error::InvalidInput("have query count is too large"))?;
+    require_have_count(count)?;
+    if count > reader.remaining() / 32 {
+        return Err(Error::InvalidInput("truncated have query"));
+    }
+    let mut chunk_ids = Vec::with_capacity(count);
+    for _ in 0..count {
+        chunk_ids.push(ChunkId(reader.array()?));
+    }
+    reader.finish()?;
+    HaveQuery::new(file_id, chunk_ids)
+}
+
+pub fn encode_have_reply(reply: &HaveReply) -> Result<Vec<u8>> {
+    require_have_count(reply.chunk_ids.len())?;
+    if reply.have_bitset.len() != reply.chunk_ids.len().div_ceil(8) {
+        return Err(Error::InvalidInput("have reply bitset length mismatch"));
+    }
+    let mut out = Vec::with_capacity(
+        HAVE_MAGIC.len() + 1 + 32 + 4 + 32 * reply.chunk_ids.len() + reply.have_bitset.len(),
+    );
+    out.extend_from_slice(HAVE_MAGIC);
+    out.push(2);
+    out.extend_from_slice(&reply.file_id.0);
+    push_length(&mut out, reply.chunk_ids.len())?;
+    for chunk_id in &reply.chunk_ids {
+        out.extend_from_slice(&chunk_id.0);
+    }
+    out.extend_from_slice(&reply.have_bitset);
+    Ok(out)
+}
+
+pub fn decode_have_reply(bytes: &[u8]) -> Result<HaveReply> {
+    let mut reader = Reader::new(bytes);
+    reader.require_prefix(HAVE_MAGIC)?;
+    if reader.byte()? != 2 {
+        return Err(Error::InvalidInput("invalid have reply kind"));
+    }
+    let file_id = FileId(reader.array()?);
+    let count = usize::try_from(reader.u32()?)
+        .map_err(|_| Error::InvalidInput("have reply count is too large"))?;
+    require_have_count(count)?;
+    let ids_bytes = count
+        .checked_mul(32)
+        .ok_or(Error::InvalidInput("have reply length overflow"))?;
+    let bitset_len = count.div_ceil(8);
+    if reader.remaining() != ids_bytes + bitset_len {
+        return Err(Error::InvalidInput("have reply length mismatch"));
+    }
+    let mut chunk_ids = Vec::with_capacity(count);
+    for _ in 0..count {
+        chunk_ids.push(ChunkId(reader.array()?));
+    }
+    let have_bitset = reader.take(bitset_len)?.to_vec();
+    reader.finish()?;
+    Ok(HaveReply {
+        file_id,
+        chunk_ids,
+        have_bitset,
+    })
+}
+
 /// A signed manifest record stores canonical `manifest_m` bytes followed by
 /// its detached signature. Decoding only parses fields; callers must verify
 /// that signature before inspecting or applying the decoded chunk identifiers.
@@ -739,6 +836,35 @@ pub fn encode_control_record(record: &ControlRecord) -> Result<Vec<u8>> {
             out.push(3);
             out.extend_from_slice(&file_id.0);
         }
+        ControlUpdate::Link {
+            parent,
+            name,
+            child,
+            is_dir,
+        } => {
+            out.push(4);
+            out.extend_from_slice(&parent.0);
+            push_variable(&mut out, name.as_bytes())?;
+            out.extend_from_slice(&child.0);
+            out.push(u8::from(*is_dir));
+        }
+        ControlUpdate::Unlink { parent, name } => {
+            out.push(5);
+            out.extend_from_slice(&parent.0);
+            push_variable(&mut out, name.as_bytes())?;
+        }
+        ControlUpdate::Rename {
+            src_parent,
+            src_name,
+            dst_parent,
+            dst_name,
+        } => {
+            out.push(6);
+            out.extend_from_slice(&src_parent.0);
+            push_variable(&mut out, src_name.as_bytes())?;
+            out.extend_from_slice(&dst_parent.0);
+            push_variable(&mut out, dst_name.as_bytes())?;
+        }
     }
     Ok(out)
 }
@@ -755,10 +881,42 @@ pub fn decode_control_record(bytes: &[u8]) -> Result<ControlRecord> {
         1 => ControlUpdate::Add(FileId(reader.array()?)),
         2 => ControlUpdate::Clear(FileId(reader.array()?)),
         3 => ControlUpdate::Remove(FileId(reader.array()?)),
+        4 => {
+            let parent = FileId(reader.array()?);
+            let name = decode_utf8_name(reader.variable()?)?;
+            let child = FileId(reader.array()?);
+            let is_dir = match reader.byte()? {
+                0 => false,
+                1 => true,
+                _ => return Err(Error::InvalidInput("invalid Link directory flag")),
+            };
+            ControlUpdate::Link {
+                parent,
+                name,
+                child,
+                is_dir,
+            }
+        }
+        5 => ControlUpdate::Unlink {
+            parent: FileId(reader.array()?),
+            name: decode_utf8_name(reader.variable()?)?,
+        },
+        6 => ControlUpdate::Rename {
+            src_parent: FileId(reader.array()?),
+            src_name: decode_utf8_name(reader.variable()?)?,
+            dst_parent: FileId(reader.array()?),
+            dst_name: decode_utf8_name(reader.variable()?)?,
+        },
         _ => return Err(Error::InvalidInput("unknown control record kind")),
     };
     reader.finish()?;
     Ok(ControlRecord { id, update })
+}
+
+fn decode_utf8_name(bytes: &[u8]) -> Result<String> {
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|_| Error::InvalidInput("directory name is not UTF-8"))
 }
 
 fn decode_manifest_message(message: &[u8], signature: Vec<u8>) -> Result<Manifest> {
@@ -781,6 +939,285 @@ fn decode_manifest_message(message: &[u8], signature: Vec<u8>) -> Result<Manifes
         version,
         signature,
     })
+}
+
+/// Encode the authenticated local metadata snapshot. The hash covers the
+/// complete header and body so decoding can reject damage before parsing any
+/// body field.
+pub fn encode_replica(metadata: &ReplicaMetadata, generation: u64) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&metadata.expected_root.0);
+    let tree = DirectoryTree::from_dirents(metadata.expected_root, metadata.dirents.clone())?;
+    let dirents = tree.dirents();
+    push_length(&mut body, dirents.len())?;
+    for entry in dirents {
+        body.extend_from_slice(&entry.parent.0);
+        push_variable(&mut body, entry.name.as_bytes())?;
+        body.extend_from_slice(&entry.child.0);
+        body.push(u8::from(entry.is_dir));
+    }
+
+    push_length(&mut body, metadata.members.len())?;
+    for member in &metadata.members {
+        body.extend_from_slice(&member.0);
+    }
+
+    push_length(&mut body, metadata.manifests.len())?;
+    for (file_id, manifest) in &metadata.manifests {
+        if manifest.file_id != *file_id {
+            return Err(Error::InvalidInput(
+                "manifest map key does not match file id",
+            ));
+        }
+        push_variable(&mut body, &manifest_m(manifest)?)?;
+        push_variable(&mut body, &manifest.signature)?;
+    }
+
+    push_length(&mut body, metadata.log.len())?;
+    let mut previous_record = None;
+    for record in &metadata.log {
+        if previous_record.is_some_and(|previous| previous >= record.id) {
+            return Err(Error::InvalidInput(
+                "instruction log is not strictly ordered",
+            ));
+        }
+        push_variable(&mut body, &encode_control_record(record)?)?;
+        previous_record = Some(record.id);
+    }
+    body.extend_from_slice(&metadata.next_control.to_be_bytes());
+
+    push_length(&mut body, metadata.mailboxes.len())?;
+    for (peer_id, queue) in &metadata.mailboxes {
+        body.extend_from_slice(&peer_id.0);
+        push_length(&mut body, queue.len())?;
+        for content in queue {
+            match content {
+                QueueContent::Control(record) => {
+                    body.push(0);
+                    push_variable(&mut body, &encode_control_record(record)?)?;
+                }
+                QueueContent::Chunk {
+                    file_id,
+                    index,
+                    chunk_id,
+                } => {
+                    body.push(1);
+                    body.extend_from_slice(&file_id.0);
+                    body.extend_from_slice(&index.to_be_bytes());
+                    body.extend_from_slice(&chunk_id.0);
+                }
+            }
+        }
+    }
+
+    push_length(&mut body, metadata.acked_through.len())?;
+    for (peer_id, applied) in &metadata.acked_through {
+        body.extend_from_slice(&peer_id.0);
+        body.extend_from_slice(&applied.to_be_bytes());
+    }
+
+    push_length(&mut body, metadata.chunk_index.len())?;
+    for (chunk_id, (file_id, index)) in &metadata.chunk_index {
+        body.extend_from_slice(&chunk_id.0);
+        body.extend_from_slice(&file_id.0);
+        body.extend_from_slice(&index.to_be_bytes());
+    }
+
+    if body.len() > MAX_REPLICA_BYTES {
+        return Err(Error::InvalidInput("replica metadata is too large"));
+    }
+    let body_len = u32::try_from(body.len())
+        .map_err(|_| Error::InvalidInput("replica metadata is too large"))?;
+    let mut out = Vec::with_capacity(REPLICA_MAGIC.len() + 1 + 8 + 4 + body.len() + 32);
+    out.extend_from_slice(REPLICA_MAGIC);
+    out.push(LOCAL_FORMAT_VERSION);
+    out.extend_from_slice(&generation.to_be_bytes());
+    out.extend_from_slice(&body_len.to_be_bytes());
+    out.extend_from_slice(&body);
+    let digest = Sha256::digest(&out);
+    out.extend_from_slice(&digest);
+    if out.len() > MAX_REPLICA_BYTES {
+        return Err(Error::InvalidInput("replica metadata is too large"));
+    }
+    Ok(out)
+}
+
+pub fn decode_replica(bytes: &[u8], expected_root: FileId) -> Result<(u64, ReplicaMetadata)> {
+    const HASH_LEN: usize = 32;
+    let header_len = REPLICA_MAGIC.len() + 1 + 8 + 4;
+    if bytes.len() > MAX_REPLICA_BYTES || bytes.len() < header_len + HASH_LEN {
+        return Err(Error::InvalidInput("invalid replica metadata length"));
+    }
+    if &bytes[..REPLICA_MAGIC.len()] != REPLICA_MAGIC {
+        return Err(Error::InvalidInput("invalid replica metadata magic"));
+    }
+    if bytes[REPLICA_MAGIC.len()] != LOCAL_FORMAT_VERSION {
+        return Err(Error::InvalidInput("unsupported replica metadata version"));
+    }
+    let generation_start = REPLICA_MAGIC.len() + 1;
+    let generation = u64::from_be_bytes(
+        bytes[generation_start..generation_start + 8]
+            .try_into()
+            .map_err(|_| Error::InvalidInput("truncated replica metadata"))?,
+    );
+    let body_len_start = generation_start + 8;
+    let body_len = usize::try_from(u32::from_be_bytes(
+        bytes[body_len_start..body_len_start + 4]
+            .try_into()
+            .map_err(|_| Error::InvalidInput("truncated replica metadata"))?,
+    ))
+    .map_err(|_| Error::InvalidInput("replica metadata body is too large"))?;
+    let body_end = header_len
+        .checked_add(body_len)
+        .ok_or(Error::InvalidInput("replica metadata length overflow"))?;
+    let expected_len = body_end
+        .checked_add(HASH_LEN)
+        .ok_or(Error::InvalidInput("replica metadata length overflow"))?;
+    if expected_len != bytes.len() {
+        return Err(Error::InvalidInput("replica metadata length mismatch"));
+    }
+    let expected_digest = Sha256::digest(&bytes[..body_end]);
+    if expected_digest[..] != bytes[body_end..] {
+        return Err(Error::AuthenticationFailed);
+    }
+
+    // No body field is read until the complete outer envelope has passed its
+    // length and SHA-256 checks.
+    let mut reader = Reader::new(&bytes[header_len..body_end]);
+    let stored_root = FileId(reader.array()?);
+    if stored_root != expected_root {
+        return Err(Error::State("replica belongs to a different vault root"));
+    }
+    let dirent_count = reader.count(69)?;
+    let mut dirents = Vec::with_capacity(dirent_count);
+    for _ in 0..dirent_count {
+        let parent = FileId(reader.array()?);
+        let name = decode_utf8_name(reader.variable()?)?;
+        let child = FileId(reader.array()?);
+        let is_dir = match reader.byte()? {
+            0 => false,
+            1 => true,
+            _ => return Err(Error::InvalidInput("invalid dirent directory flag")),
+        };
+        dirents.push(crate::store::tree::Dirent {
+            parent,
+            name,
+            child,
+            is_dir,
+        });
+    }
+    let dirents = DirectoryTree::from_dirents(expected_root, dirents)?.dirents();
+
+    let member_count = reader.count(32)?;
+    let mut members = std::collections::BTreeSet::new();
+    let mut previous_member = None;
+    for _ in 0..member_count {
+        let member = PeerId(reader.array()?);
+        if previous_member.is_some_and(|previous| previous >= member) {
+            return Err(Error::InvalidInput("replica members are not canonical"));
+        }
+        members.insert(member);
+        previous_member = Some(member);
+    }
+
+    let manifest_count = reader.count(4 + 4)?;
+    let mut manifests = std::collections::BTreeMap::new();
+    let mut previous_file = None;
+    for _ in 0..manifest_count {
+        let message = reader.variable()?;
+        let signature = reader.variable()?.to_vec();
+        let manifest = decode_manifest_message(message, signature)?;
+        let file_id = manifest.file_id;
+        if previous_file.is_some_and(|previous| previous >= file_id) {
+            return Err(Error::InvalidInput("replica manifests are not canonical"));
+        }
+        manifests.insert(file_id, manifest);
+        previous_file = Some(file_id);
+    }
+
+    let log_count = reader.count(4)?;
+    let mut log = Vec::with_capacity(log_count);
+    let mut previous_record = None;
+    for _ in 0..log_count {
+        let record = decode_control_record(reader.variable()?)?;
+        if previous_record.is_some_and(|previous| previous >= record.id) {
+            return Err(Error::InvalidInput(
+                "instruction log is not strictly ordered",
+            ));
+        }
+        previous_record = Some(record.id);
+        log.push(record);
+    }
+    let next_control = reader.u64()?;
+
+    let mailbox_count = reader.count(32 + 4)?;
+    let mut mailboxes = std::collections::BTreeMap::new();
+    let mut previous_peer = None;
+    for _ in 0..mailbox_count {
+        let peer_id = PeerId(reader.array()?);
+        if previous_peer.is_some_and(|previous| previous >= peer_id) {
+            return Err(Error::InvalidInput("replica mailboxes are not canonical"));
+        }
+        let queue_count = reader.count(1)?;
+        let mut queue = Vec::with_capacity(queue_count);
+        for _ in 0..queue_count {
+            queue.push(match reader.byte()? {
+                0 => QueueContent::Control(decode_control_record(reader.variable()?)?),
+                1 => QueueContent::Chunk {
+                    file_id: FileId(reader.array()?),
+                    index: reader.u64()?,
+                    chunk_id: ChunkId(reader.array()?),
+                },
+                _ => return Err(Error::InvalidInput("unknown durable mailbox content kind")),
+            });
+        }
+        mailboxes.insert(peer_id, queue);
+        previous_peer = Some(peer_id);
+    }
+
+    let ack_count = reader.count(40)?;
+    let mut acked_through = std::collections::BTreeMap::new();
+    let mut previous_peer = None;
+    for _ in 0..ack_count {
+        let peer_id = PeerId(reader.array()?);
+        if previous_peer.is_some_and(|previous| previous >= peer_id) {
+            return Err(Error::InvalidInput(
+                "replica acknowledgements are not canonical",
+            ));
+        }
+        acked_through.insert(peer_id, reader.u64()?);
+        previous_peer = Some(peer_id);
+    }
+
+    let chunk_count = reader.count(72)?;
+    let mut chunk_index = std::collections::BTreeMap::new();
+    let mut previous_chunk = None;
+    for _ in 0..chunk_count {
+        let chunk_id = ChunkId(reader.array()?);
+        if previous_chunk.is_some_and(|previous| previous >= chunk_id) {
+            return Err(Error::InvalidInput("replica chunk index is not canonical"));
+        }
+        let file_id = FileId(reader.array()?);
+        let index = reader.u64()?;
+        chunk_index.insert(chunk_id, (file_id, index));
+        previous_chunk = Some(chunk_id);
+    }
+    reader.finish()?;
+
+    Ok((
+        generation,
+        ReplicaMetadata {
+            expected_root,
+            dirents,
+            members,
+            manifests,
+            log,
+            next_control,
+            mailboxes,
+            acked_through,
+            chunk_index,
+        },
+    ))
 }
 
 pub fn flush_m(challenge: &FlushChallenge) -> [u8; 32] {
@@ -1240,5 +1677,165 @@ mod persistence_tests {
         let mut aad = packet_aad(&header);
         aad[0] = PROTOCOL_VERSION + 1;
         assert!(decode_aad(&aad).is_err());
+    }
+
+    #[test]
+    fn replica_round_trip_preserves_metadata_without_plaintext_or_ciphertext() {
+        let root = FileId([0x10; 32]);
+        let member = PeerId([0x20; 32]);
+        let file_id = FileId([0x30; 32]);
+        let chunk_id = ChunkId([0x40; 32]);
+        let record = ControlRecord {
+            id: 1,
+            update: ControlUpdate::Add(file_id),
+        };
+        let mut metadata = ReplicaMetadata::new(root);
+        metadata.members.insert(member);
+        metadata.log.push(record.clone());
+        metadata.next_control = 2;
+        metadata
+            .mailboxes
+            .insert(member, vec![QueueContent::Control(record)]);
+        metadata.acked_through.insert(member, 0);
+        metadata.chunk_index.insert(chunk_id, (file_id, 7));
+
+        let encoded = must_ok(encode_replica(&metadata, 9));
+        let (generation, decoded) = must_ok(decode_replica(&encoded, root));
+        assert_eq!(generation, 9);
+        assert!(decoded == metadata);
+    }
+
+    #[test]
+    fn replica_rejects_damage_truncation_and_wrong_root() {
+        let root = FileId([0x51; 32]);
+        let encoded = must_ok(encode_replica(&ReplicaMetadata::new(root), 1));
+
+        let mut damaged = encoded.clone();
+        let body_offset = REPLICA_MAGIC.len() + 1 + 8 + 4;
+        damaged[body_offset] ^= 1;
+        assert!(matches!(
+            decode_replica(&damaged, root),
+            Err(Error::AuthenticationFailed)
+        ));
+        assert!(decode_replica(&encoded[..encoded.len() - 1], root).is_err());
+        assert!(matches!(
+            decode_replica(&encoded, FileId([0x52; 32])),
+            Err(Error::State(_))
+        ));
+    }
+
+    #[test]
+    fn tree_control_kinds_round_trip_without_changing_legacy_kinds() {
+        let parent = FileId([0x71; 32]);
+        let child = FileId([0x72; 32]);
+        let updates = [
+            ControlUpdate::Link {
+                parent,
+                name: "é".to_owned(),
+                child,
+                is_dir: true,
+            },
+            ControlUpdate::Unlink {
+                parent,
+                name: "old".to_owned(),
+            },
+            ControlUpdate::Rename {
+                src_parent: parent,
+                src_name: "from".to_owned(),
+                dst_parent: child,
+                dst_name: "to".to_owned(),
+            },
+        ];
+        for (offset, update) in updates.into_iter().enumerate() {
+            let record = ControlRecord {
+                id: offset as u64 + 8,
+                update,
+            };
+            let encoded = must_ok(encode_control_record(&record));
+            assert_eq!(encoded[8], offset as u8 + 4);
+            assert!(must_ok(decode_control_record(&encoded)) == record);
+        }
+
+        let legacy = ControlRecord {
+            id: 3,
+            update: ControlUpdate::Add(parent),
+        };
+        let encoded = must_ok(encode_control_record(&legacy));
+        assert_eq!(encoded.len(), 41);
+        assert_eq!(encoded[8], 1);
+    }
+
+    #[test]
+    fn replica_round_trip_preserves_canonical_tree() {
+        let root = FileId([0x81; 32]);
+        let mut tree = DirectoryTree::new(root);
+        must_ok(tree.link(root, "a", FileId([0x82; 32]), true));
+        must_ok(tree.link(FileId([0x82; 32]), "f", FileId([0x83; 32]), false));
+        let mut metadata = ReplicaMetadata::new(root);
+        metadata.dirents = tree.dirents();
+        let encoded = must_ok(encode_replica(&metadata, 2));
+        let (_, decoded) = must_ok(decode_replica(&encoded, root));
+        assert!(decoded.dirents == metadata.dirents);
+    }
+
+    #[test]
+    fn heartbeat_watermark_extends_only_the_existing_heartbeat_kind() {
+        assert_eq!(must_ok(encode_net_control(&NetControl::Heartbeat)), [5]);
+        let applied = NetControl::HeartbeatApplied { through: 19 };
+        let encoded = must_ok(encode_net_control(&applied));
+        assert_eq!(encoded.len(), 9);
+        assert_eq!(encoded[0], 5);
+        assert!(must_ok(decode_net_control(&encoded)) == applied);
+        assert!(decode_net_control(&[5, 0]).is_err());
+    }
+
+    #[test]
+    fn have_query_and_reply_use_separate_strict_magic_framing() {
+        let query = must_ok(HaveQuery::new(
+            FileId([0x91; 32]),
+            vec![ChunkId([0xa1; 32]), ChunkId([0xa2; 32])],
+        ));
+        let query_bytes = must_ok(encode_have_query(&query));
+        assert_eq!(&query_bytes[..HAVE_MAGIC.len()], HAVE_MAGIC);
+        assert_eq!(query_bytes[HAVE_MAGIC.len()], 1);
+        assert!(must_ok(decode_have_query(&query_bytes)) == query);
+        assert!(decode_net_control(&query_bytes).is_err());
+        assert!(decode_pull_request(&query_bytes).is_err());
+        assert!(decode_control_record(&query_bytes).is_err());
+
+        let reply = must_ok(HaveReply::new(&query, vec![0b01]));
+        let reply_bytes = must_ok(encode_have_reply(&reply));
+        assert_eq!(reply_bytes[HAVE_MAGIC.len()], 2);
+        let decoded = must_ok(decode_have_reply(&reply_bytes));
+        assert!(decoded == reply);
+        assert!(decoded.validate(&query).is_ok());
+
+        let mut truncated = reply_bytes.clone();
+        truncated.pop();
+        assert!(decode_have_reply(&truncated).is_err());
+        let mut trailing = reply_bytes;
+        trailing.push(0);
+        assert!(decode_have_reply(&trailing).is_err());
+    }
+
+    #[test]
+    fn have_decoders_reject_zero_oversized_and_wrong_kinds() {
+        let count_offset = HAVE_MAGIC.len() + 1 + 32;
+        let mut zero = Vec::from(HAVE_MAGIC.as_slice());
+        zero.push(1);
+        zero.extend_from_slice(&[0; 32]);
+        zero.extend_from_slice(&0u32.to_be_bytes());
+        assert!(decode_have_query(&zero).is_err());
+
+        let mut oversized = zero;
+        oversized[count_offset..count_offset + 4].copy_from_slice(&33u32.to_be_bytes());
+        assert!(decode_have_query(&oversized).is_err());
+
+        let mut wrong_kind = must_ok(encode_have_query(&must_ok(HaveQuery::new(
+            FileId([1; 32]),
+            vec![ChunkId([2; 32])],
+        ))));
+        wrong_kind[HAVE_MAGIC.len()] = 2;
+        assert!(decode_have_query(&wrong_kind).is_err());
     }
 }
