@@ -40,7 +40,7 @@ export interface SplashTimeline {
 }
 
 // Barrage: anticipation beat → surge → decelerate. Measured against the
-// colour-from-the-right targets at 1280×800 — t250 ≤25% · t500 35–60% ·
+// color-from-the-right targets at 1280×800 — t250 ≤25% · t500 35–60% ·
 // t800 70–90% · t1100 ≥95% · t1400 full — this lands 18/40/89/100/100.
 // (0.16,1,0.3,1) put the waves at ~65% of their travel by 250 ms.
 const easeBarrage = cubicBezier(0.7, 0, 0.2, 1);

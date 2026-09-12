@@ -67,8 +67,18 @@ export function BackendProvider({ children }: { children: ReactNode }) {
     alive.current = true;
     void refresh();
     const unsubscribe = client.subscribe((e) => {
-      if (e.type === "servers-changed") void refresh();
-      else setStatus(e.status);
+      switch (e.type) {
+        case "servers-changed":
+          void refresh();
+          break;
+        case "daemon-status":
+          setStatus(e.status);
+          break;
+        default:
+          // Workspace events (fs, presence, members, recents) belong to the workspace
+          // store, not to this provider; ignoring them here keeps the two independent.
+          break;
+      }
     });
     return () => {
       alive.current = false;

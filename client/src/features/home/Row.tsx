@@ -82,14 +82,28 @@ export function ServerHeading({
   );
 }
 
-/** One vault: name on top, membership and footprint underneath. */
-export function VaultRow({ vault, first }: { vault: Vault; first: boolean }) {
+/**
+ * One vault: name on top, membership and footprint underneath.
+ *
+ * `onOpen` is handed the row element, not just the vault: the dive's aperture
+ * starts on this row's exact rect, and only the row itself knows where it is.
+ */
+export function VaultRow({
+  vault,
+  first,
+  onOpen,
+}: {
+  vault: Vault;
+  first: boolean;
+  onOpen?(vault: Vault, el: HTMLElement): void;
+}) {
   const members = `${vault.memberCount} member${vault.memberCount === 1 ? "" : "s"}`;
 
   return (
     <button
       type="button"
       data-row="vault"
+      onClick={(e) => onOpen?.(vault, e.currentTarget)}
       className={`${ROW} min-h-[58px] items-start ${first ? "" : "border-t border-line"}`}
     >
       <span

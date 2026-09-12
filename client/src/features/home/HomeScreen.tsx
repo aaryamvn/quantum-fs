@@ -2,7 +2,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
 import { useBackend } from "@/lib/backend";
-import type { OrchestrationServer } from "@/lib/backend";
+import type { OrchestrationServer, Vault } from "@/lib/backend";
 import { APP_NAME } from "@/lib/brand";
 
 import type { HomeScreenProps } from "./types";
@@ -34,6 +34,17 @@ const GAP_JOIN = 20;
 const EASE = "ease-[cubic-bezier(0.2,0.8,0.2,1)]";
 
 /**
+ * What the shell needs from a vault row beyond the vault itself.
+ *
+ * Declared here rather than in `types.ts` because it is a shell concern, not a
+ * home one: the home does not know what opening a vault does, only that the
+ * element that was clicked is the rect the dive has to start from.
+ */
+interface Props extends HomeScreenProps {
+  onOpenVault?(vault: Vault, el: HTMLElement): void;
+}
+
+/**
  * Home screen.
  *
  * A server is a heading, its vaults are one card underneath it, and the only
@@ -41,7 +52,7 @@ const EASE = "ease-[cubic-bezier(0.2,0.8,0.2,1)]";
  * sit at the two ends of the column: one in the list, one pinned to the corner
  * of the window where it stays out of the content's way.
  */
-export function HomeScreen({ revealed }: HomeScreenProps) {
+export function HomeScreen({ revealed, onOpenVault }: Props) {
   const { servers } = useBackend();
   const reduced = useReducedMotion() ?? false;
   const v = homeVariants(reduced);
@@ -114,7 +125,12 @@ export function HomeScreen({ revealed }: HomeScreenProps) {
                   <Card>
                     {server.vaults.length > 0 ? (
                       server.vaults.map((vault, i) => (
-                        <VaultRow key={vault.id} vault={vault} first={i === 0} />
+                        <VaultRow
+                          key={vault.id}
+                          vault={vault}
+                          first={i === 0}
+                          onOpen={onOpenVault}
+                        />
                       ))
                     ) : (
                       <EmptyVaultRow />

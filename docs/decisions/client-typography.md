@@ -1,5 +1,5 @@
 # Client typography: GT Walsheim, Medium is the heaviest weight
-status: accepted
+status: superseded-by: docs/decisions/client-typography-inter.md
 date: 2026-09-12      scope: client
 decision: >
   The UI font is "GT Walsheim Trial", loaded from the operating system with CSS local() (no font

@@ -40,7 +40,7 @@ const pct = (part: number, whole: number) =>
 /**
  * How much of a server this vault gets.
  *
- * One bar carries the whole story: what the existing vaults already hold (grey),
+ * One bar carries the whole story: what the existing vaults already hold (gray),
  * what this vault is about to take (white), and what is left (the empty track).
  * The range input covers only the free stretch, so the drag can never reach into
  * storage that is already spoken for.
@@ -79,7 +79,7 @@ export function AllocationSlider({
 
       {/*
         The wrapper is exactly the track: the thumb and the pointer target are
-        absolutely positioned and centred on it, so they can be taller than the
+        absolutely positioned and centered on it, so they can be taller than the
         bar without pushing the captions away from it.
       */}
       <div className="relative mt-[10px]" style={{ height: TRACK_H }}>

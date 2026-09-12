@@ -1,0 +1,6429 @@
+{
+  "generatedAt": 1789214400000,
+  "self": "peer_aaryaman",
+  "vaults": {
+    "vlt_1_1": {
+      "id": "vlt_1_1",
+      "serverId": "srv_1",
+      "name": "Design Assets",
+      "description": "Brand, campaign and film source files for the studio.",
+      "joinCode": "VIIG6U",
+      "createdAt": 1755321960000,
+      "createdBy": "peer_aaryaman",
+      "keyRotatedAt": 1789070400000,
+      "autoCleanup": true,
+      "cleanupThresholdPct": 90
+    },
+    "vlt_1_2": {
+      "id": "vlt_1_2",
+      "serverId": "srv_1",
+      "name": "Hackathon Build",
+      "description": "Source tree for the post-quantum file system prototype.",
+      "joinCode": "MMLTVR",
+      "createdAt": 1783929720000,
+      "createdBy": "peer_justin",
+      "keyRotatedAt": 1789088400000,
+      "autoCleanup": false,
+      "cleanupThresholdPct": 90
+    },
+    "vlt_1_3": {
+      "id": "vlt_1_3",
+      "serverId": "srv_1",
+      "name": "Family Photos",
+      "description": "Shared camera roll, originals kept on the home server.",
+      "joinCode": "VYQYBQ",
+      "createdAt": 1756376220000,
+      "createdBy": "peer_maya",
+      "keyRotatedAt": 1788829200000,
+      "autoCleanup": true,
+      "cleanupThresholdPct": 90
+    },
+    "vlt_2_1": {
+      "id": "vlt_2_1",
+      "serverId": "srv_2",
+      "name": "Research Papers",
+      "description": "Drafts, published work and the datasets behind them.",
+      "joinCode": "4OXF4P",
+      "createdAt": 1762367640000,
+      "createdBy": "peer_lena",
+      "keyRotatedAt": 1788652800000,
+      "autoCleanup": false,
+      "cleanupThresholdPct": 90
+    },
+    "vlt_2_2": {
+      "id": "vlt_2_2",
+      "serverId": "srv_2",
+      "name": "Backups",
+      "description": "Rolling machine images and database snapshots.",
+      "joinCode": "JMMVLR",
+      "createdAt": 1759404960000,
+      "createdBy": "peer_aaryaman",
+      "keyRotatedAt": 1788850800000,
+      "autoCleanup": true,
+      "cleanupThresholdPct": 90
+    }
+  },
+  "members": {
+    "vlt_1_1": [
+      {
+        "peerId": "peer_aaryaman",
+        "name": "Aaryaman Maheshwari",
+        "initials": "AM",
+        "color": "#FF7B7B",
+        "role": "admin",
+        "online": true,
+        "lastSeenAt": 1789214400000,
+        "lastEdited": {
+          "nodeId": "n_1_1_039",
+          "at": 1787254583558
+        },
+        "queuedOps": 0,
+        "isSelf": true
+      },
+      {
+        "peerId": "peer_justin",
+        "name": "Justin Park",
+        "initials": "JP",
+        "color": "#4E0EFF",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214100000,
+        "lastEdited": {
+          "nodeId": "n_1_1_056",
+          "at": 1788356530093
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_maya",
+        "name": "Maya Okafor",
+        "initials": "MO",
+        "color": "#7BFFD6",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214160000,
+        "lastEdited": {
+          "nodeId": "n_1_1_057",
+          "at": 1778992038432
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_kenji",
+        "name": "Kenji Watanabe",
+        "initials": "KW",
+        "color": "#FFC27B",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214100000,
+        "lastEdited": {
+          "nodeId": "n_1_1_004",
+          "at": 1787441309262
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_priya",
+        "name": "Priya Nair",
+        "initials": "PN",
+        "color": "#C084FC",
+        "role": "member",
+        "online": false,
+        "lastSeenAt": 1789203600000,
+        "lastEdited": null,
+        "queuedOps": 7,
+        "isSelf": false
+      }
+    ],
+    "vlt_1_2": [
+      {
+        "peerId": "peer_justin",
+        "name": "Justin Park",
+        "initials": "JP",
+        "color": "#4E0EFF",
+        "role": "admin",
+        "online": true,
+        "lastSeenAt": 1789214100000,
+        "lastEdited": {
+          "nodeId": "n_1_2_050",
+          "at": 1785701811997
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_aaryaman",
+        "name": "Aaryaman Maheshwari",
+        "initials": "AM",
+        "color": "#FF7B7B",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214100000,
+        "lastEdited": {
+          "nodeId": "n_1_2_023",
+          "at": 1787875021537
+        },
+        "queuedOps": 0,
+        "isSelf": true
+      },
+      {
+        "peerId": "peer_kenji",
+        "name": "Kenji Watanabe",
+        "initials": "KW",
+        "color": "#FFC27B",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214220000,
+        "lastEdited": {
+          "nodeId": "n_1_2_055",
+          "at": 1788613235738
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_lena",
+        "name": "Lena Fischer",
+        "initials": "LF",
+        "color": "#60A5FA",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214220000,
+        "lastEdited": {
+          "nodeId": "n_1_2_009",
+          "at": 1787834086538
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_omar",
+        "name": "Omar Haddad",
+        "initials": "OH",
+        "color": "#F472B6",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214280000,
+        "lastEdited": {
+          "nodeId": "n_1_2_023",
+          "at": 1787875021537
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      }
+    ],
+    "vlt_1_3": [
+      {
+        "peerId": "peer_maya",
+        "name": "Maya Okafor",
+        "initials": "MO",
+        "color": "#7BFFD6",
+        "role": "admin",
+        "online": true,
+        "lastSeenAt": 1789214160000,
+        "lastEdited": {
+          "nodeId": "n_1_3_036",
+          "at": 1782067772806
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_aaryaman",
+        "name": "Aaryaman Maheshwari",
+        "initials": "AM",
+        "color": "#FF7B7B",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214100000,
+        "lastEdited": {
+          "nodeId": "n_1_3_004",
+          "at": 1782524965370
+        },
+        "queuedOps": 0,
+        "isSelf": true
+      }
+    ],
+    "vlt_2_1": [
+      {
+        "peerId": "peer_lena",
+        "name": "Lena Fischer",
+        "initials": "LF",
+        "color": "#60A5FA",
+        "role": "admin",
+        "online": true,
+        "lastSeenAt": 1789214100000,
+        "lastEdited": {
+          "nodeId": "n_2_1_006",
+          "at": 1787709566580
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_aaryaman",
+        "name": "Aaryaman Maheshwari",
+        "initials": "AM",
+        "color": "#FF7B7B",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214340000,
+        "lastEdited": {
+          "nodeId": "n_2_1_006",
+          "at": 1787709566580
+        },
+        "queuedOps": 0,
+        "isSelf": true
+      },
+      {
+        "peerId": "peer_sofia",
+        "name": "Sofia Rossi",
+        "initials": "SR",
+        "color": "#34D399",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214340000,
+        "lastEdited": {
+          "nodeId": "n_2_1_013",
+          "at": 1782672958752
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      },
+      {
+        "peerId": "peer_omar",
+        "name": "Omar Haddad",
+        "initials": "OH",
+        "color": "#F472B6",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214400000,
+        "lastEdited": {
+          "nodeId": "n_2_1_019",
+          "at": 1784145464804
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      }
+    ],
+    "vlt_2_2": [
+      {
+        "peerId": "peer_aaryaman",
+        "name": "Aaryaman Maheshwari",
+        "initials": "AM",
+        "color": "#FF7B7B",
+        "role": "admin",
+        "online": true,
+        "lastSeenAt": 1789214280000,
+        "lastEdited": {
+          "nodeId": "n_2_2_013",
+          "at": 1774699147641
+        },
+        "queuedOps": 0,
+        "isSelf": true
+      },
+      {
+        "peerId": "peer_kenji",
+        "name": "Kenji Watanabe",
+        "initials": "KW",
+        "color": "#FFC27B",
+        "role": "member",
+        "online": true,
+        "lastSeenAt": 1789214280000,
+        "lastEdited": {
+          "nodeId": "n_2_2_024",
+          "at": 1784488992801
+        },
+        "queuedOps": 0,
+        "isSelf": false
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "root_vlt_1_1",
+      "vaultId": "vlt_1_1",
+      "parentId": null,
+      "kind": "folder",
+      "name": "Design Assets",
+      "sizeBytes": 56407213158,
+      "createdAt": 1755321960000,
+      "modifiedAt": 1789213860000,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 30
+    },
+    {
+      "id": "n_1_1_projects",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "folder",
+      "name": "Projects",
+      "sizeBytes": 13185224460,
+      "createdAt": 1761846660000,
+      "modifiedAt": 1788785637523,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_priya",
+      "color": "violet",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 6
+    },
+    {
+      "id": "n_1_1_001",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_projects",
+      "kind": "folder",
+      "name": "Website",
+      "sizeBytes": 524546429,
+      "createdAt": 1776882540000,
+      "modifiedAt": 1787441309262,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_kenji",
+      "color": "blue",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 8
+    },
+    {
+      "id": "n_1_1_002",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_001",
+      "kind": "file",
+      "name": "index.html",
+      "sizeBytes": 56956,
+      "createdAt": 1778970060000,
+      "modifiedAt": 1781701346543,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_003",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_001",
+      "kind": "file",
+      "name": "about.tsx",
+      "sizeBytes": 30910,
+      "createdAt": 1779915780000,
+      "modifiedAt": 1780183654634,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_004",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_001",
+      "kind": "file",
+      "name": "sitemap.xml",
+      "sizeBytes": 1486,
+      "createdAt": 1786801980000,
+      "modifiedAt": 1787441309262,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_005",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_001",
+      "kind": "file",
+      "name": "robots.txt",
+      "sizeBytes": 45865,
+      "createdAt": 1779471540000,
+      "modifiedAt": 1784050750709,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_priya",
+        "peer_justin",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_006",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_001",
+      "kind": "file",
+      "name": "analytics.tsv",
+      "sizeBytes": 118636802,
+      "createdAt": 1783841220000,
+      "modifiedAt": 1784290158489,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_007",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_001",
+      "kind": "file",
+      "name": "hero.jpeg",
+      "sizeBytes": 6926143,
+      "createdAt": 1785445980000,
+      "modifiedAt": 1785459339103,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_008",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_001",
+      "kind": "file",
+      "name": "wireframe.xd",
+      "sizeBytes": 382797797,
+      "createdAt": 1781235300000,
+      "modifiedAt": 1782448011735,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_009",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_001",
+      "kind": "file",
+      "name": "copy.rtf",
+      "sizeBytes": 16050470,
+      "createdAt": 1784060100000,
+      "modifiedAt": 1786730996885,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_010",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_projects",
+      "kind": "folder",
+      "name": "Mobile App",
+      "sizeBytes": 9066923996,
+      "createdAt": 1781471040000,
+      "modifiedAt": 1788785637523,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": "green",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 7
+    },
+    {
+      "id": "n_1_1_011",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_010",
+      "kind": "file",
+      "name": "onboarding.mp4",
+      "sizeBytes": 1067001002,
+      "createdAt": 1784927880000,
+      "modifiedAt": 1786366073053,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_justin",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_012",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_010",
+      "kind": "file",
+      "name": "design.afdesign",
+      "sizeBytes": 76786147,
+      "createdAt": 1788469620000,
+      "modifiedAt": 1788785637523,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_013",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_010",
+      "kind": "file",
+      "name": "splash.psd",
+      "sizeBytes": 388478874,
+      "createdAt": 1786750020000,
+      "modifiedAt": 1788153332136,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_014",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_010",
+      "kind": "file",
+      "name": "store-listing.odt",
+      "sizeBytes": 2014261,
+      "createdAt": 1783901880000,
+      "modifiedAt": 1784718320917,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_priya",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_015",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_010",
+      "kind": "file",
+      "name": "metrics.jsonl",
+      "sizeBytes": 183405350,
+      "createdAt": 1785488040000,
+      "modifiedAt": 1785873589259,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_016",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_010",
+      "kind": "file",
+      "name": "flow.drawio",
+      "sizeBytes": 68068,
+      "createdAt": 1782282960000,
+      "modifiedAt": 1782459613076,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_017",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_010",
+      "kind": "file",
+      "name": "build.ipa",
+      "sizeBytes": 7349170294,
+      "createdAt": 1788597600000,
+      "modifiedAt": 1788606776186,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_018",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_projects",
+      "kind": "folder",
+      "name": "Q4 Campaign",
+      "sizeBytes": 3588542815,
+      "createdAt": 1772347980000,
+      "modifiedAt": 1788714558790,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_priya",
+      "color": "amber",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 9
+    },
+    {
+      "id": "n_1_1_019",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "spots.mp3",
+      "sizeBytes": 93698239,
+      "createdAt": 1786940160000,
+      "modifiedAt": 1787281818801,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_020",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "radio.aac",
+      "sizeBytes": 93737263,
+      "createdAt": 1786789380000,
+      "modifiedAt": 1786824688223,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_021",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "banner.avif",
+      "sizeBytes": 10629972,
+      "createdAt": 1783521300000,
+      "modifiedAt": 1785066622457,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_justin",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_022",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "print.eps",
+      "sizeBytes": 26903,
+      "createdAt": 1772463120000,
+      "modifiedAt": 1780000186641,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_023",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "slides.odp",
+      "sizeBytes": 20164670,
+      "createdAt": 1775428860000,
+      "modifiedAt": 1778293003635,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_024",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "sheet.ods",
+      "sizeBytes": 8479114,
+      "createdAt": 1775843820000,
+      "modifiedAt": 1782867041633,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_025",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "captions.vtt",
+      "sizeBytes": 41203,
+      "createdAt": 1783132380000,
+      "modifiedAt": 1786291185507,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_justin",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_026",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "master.mkv",
+      "sizeBytes": 1032718301,
+      "createdAt": 1783353060000,
+      "modifiedAt": 1784328633305,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_027",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_018",
+      "kind": "file",
+      "name": "promo.webm",
+      "sizeBytes": 2329047150,
+      "createdAt": 1786988700000,
+      "modifiedAt": 1788714558790,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_028",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_projects",
+      "kind": "file",
+      "name": "roadmap.md",
+      "sizeBytes": 20979,
+      "createdAt": 1766814960000,
+      "modifiedAt": 1772517784507,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_029",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_projects",
+      "kind": "file",
+      "name": "timeline.xlsx",
+      "sizeBytes": 3007357,
+      "createdAt": 1788536220000,
+      "modifiedAt": 1788722741954,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_030",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_projects",
+      "kind": "file",
+      "name": "brief.docx",
+      "sizeBytes": 2182884,
+      "createdAt": 1776640860000,
+      "modifiedAt": 1779731620468,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_brand",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "folder",
+      "name": "Brand",
+      "sizeBytes": 1742966649,
+      "createdAt": 1762287360000,
+      "modifiedAt": 1786829117662,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": "coral",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 8
+    },
+    {
+      "id": "n_1_1_031",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_brand",
+      "kind": "file",
+      "name": "logo.ai",
+      "sizeBytes": 62525731,
+      "createdAt": 1774259820000,
+      "modifiedAt": 1781076745277,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_032",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_brand",
+      "kind": "file",
+      "name": "wordmark.svg",
+      "sizeBytes": 22205,
+      "createdAt": 1765895940000,
+      "modifiedAt": 1765933576897,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_033",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_brand",
+      "kind": "file",
+      "name": "guidelines.pdf",
+      "sizeBytes": 13892236,
+      "createdAt": 1763567340000,
+      "modifiedAt": 1770985235100,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_034",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_brand",
+      "kind": "file",
+      "name": "colors.json",
+      "sizeBytes": 46995,
+      "createdAt": 1765187760000,
+      "modifiedAt": 1769279064320,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_035",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_brand",
+      "kind": "file",
+      "name": "type-specimen.indd",
+      "sizeBytes": 273368692,
+      "createdAt": 1778573040000,
+      "modifiedAt": 1781588164414,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_036",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_brand",
+      "kind": "file",
+      "name": "brand.psd",
+      "sizeBytes": 146761894,
+      "createdAt": 1785975960000,
+      "modifiedAt": 1786829117662,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_037",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_brand",
+      "kind": "file",
+      "name": "favicon.ico",
+      "sizeBytes": 27600,
+      "createdAt": 1776410520000,
+      "modifiedAt": 1777730606658,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_038",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_brand",
+      "kind": "file",
+      "name": "social-kit.zip",
+      "sizeBytes": 1246321296,
+      "createdAt": 1771854540000,
+      "modifiedAt": 1772392360084,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_archive",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "folder",
+      "name": "Archive",
+      "sizeBytes": 26746148768,
+      "createdAt": 1778671980000,
+      "modifiedAt": 1787718590827,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 7
+    },
+    {
+      "id": "n_1_1_039",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_archive",
+      "kind": "file",
+      "name": "2019-site.zip",
+      "sizeBytes": 4636616014,
+      "createdAt": 1785804960000,
+      "modifiedAt": 1787254583558,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_040",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_archive",
+      "kind": "file",
+      "name": "old-logos.tar.gz",
+      "sizeBytes": 6257175038,
+      "createdAt": 1784580420000,
+      "modifiedAt": 1784728347316,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_041",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_archive",
+      "kind": "file",
+      "name": "backup-2024.dmg",
+      "sizeBytes": 2290030042,
+      "createdAt": 1784058000000,
+      "modifiedAt": 1784096280017,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_042",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_archive",
+      "kind": "file",
+      "name": "legacy.iso",
+      "sizeBytes": 6995775428,
+      "createdAt": 1787103960000,
+      "modifiedAt": 1787718590827,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_043",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_archive",
+      "kind": "file",
+      "name": "archive.7z",
+      "sizeBytes": 2561063488,
+      "createdAt": 1780523880000,
+      "modifiedAt": 1780996602544,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_priya",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_044",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_archive",
+      "kind": "file",
+      "name": "misc.rar",
+      "sizeBytes": 3635494867,
+      "createdAt": 1785464700000,
+      "modifiedAt": 1786669792297,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_045",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_archive",
+      "kind": "file",
+      "name": "retired.bak",
+      "sizeBytes": 369993891,
+      "createdAt": 1781396460000,
+      "modifiedAt": 1781453702831,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_kenji",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_film",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "folder",
+      "name": "Film",
+      "sizeBytes": 4555782252,
+      "createdAt": 1782013740000,
+      "modifiedAt": 1788651474391,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": "blue",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 10
+    },
+    {
+      "id": "n_1_1_046",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "intro.mov",
+      "sizeBytes": 638021516,
+      "createdAt": 1788424140000,
+      "modifiedAt": 1788651474391,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_047",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "teaser.mp4",
+      "sizeBytes": 2612545567,
+      "createdAt": 1784233800000,
+      "modifiedAt": 1786165538951,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_048",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "master.prores",
+      "sizeBytes": 458585338,
+      "createdAt": 1784183100000,
+      "modifiedAt": 1784816157231,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_maya",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_049",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "captions.srt",
+      "sizeBytes": 71655,
+      "createdAt": 1788332940000,
+      "modifiedAt": 1788459080611,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_050",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "edit.prproj",
+      "sizeBytes": 380700118,
+      "createdAt": 1787313060000,
+      "modifiedAt": 1787591768384,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_051",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "motion.aep",
+      "sizeBytes": 36341320,
+      "createdAt": 1782780300000,
+      "modifiedAt": 1783384783160,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_052",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "vo.aiff",
+      "sizeBytes": 60141506,
+      "createdAt": 1784463300000,
+      "modifiedAt": 1784500231112,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_justin",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_053",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "mix.wav",
+      "sizeBytes": 108846795,
+      "createdAt": 1785980160000,
+      "modifiedAt": 1786510036748,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_054",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "storyboard.pdf",
+      "sizeBytes": 12332857,
+      "createdAt": 1787175780000,
+      "modifiedAt": 1788066817882,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_055",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_film",
+      "kind": "file",
+      "name": "color-lut.cube",
+      "sizeBytes": 248195580,
+      "createdAt": 1782246060000,
+      "modifiedAt": 1784739372099,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_research",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "folder",
+      "name": "Research",
+      "sizeBytes": 915440390,
+      "createdAt": 1758134760000,
+      "modifiedAt": 1788886244763,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_aaryaman",
+      "color": "teal",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_maya",
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 10
+    },
+    {
+      "id": "n_1_1_056",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "survey.csv",
+      "sizeBytes": 151994815,
+      "createdAt": 1788350760000,
+      "modifiedAt": 1788356530093,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_057",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "analysis.ipynb",
+      "sizeBytes": 60567,
+      "createdAt": 1777310700000,
+      "modifiedAt": 1778992038432,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_058",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "model.py",
+      "sizeBytes": 60760,
+      "createdAt": 1773422160000,
+      "modifiedAt": 1778356604328,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_priya",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_059",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "report.tex",
+      "sizeBytes": 17658,
+      "createdAt": 1763940120000,
+      "modifiedAt": 1765401748066,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_060",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "refs.bib",
+      "sizeBytes": 81433,
+      "createdAt": 1788790740000,
+      "modifiedAt": 1788886244763,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_061",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "results.parquet",
+      "sizeBytes": 379664338,
+      "createdAt": 1760222700000,
+      "modifiedAt": 1764134345791,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_062",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "plots.r",
+      "sizeBytes": 47323,
+      "createdAt": 1762411080000,
+      "modifiedAt": 1767598401381,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_063",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "summary.md",
+      "sizeBytes": 2155,
+      "createdAt": 1773806580000,
+      "modifiedAt": 1777721508825,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_064",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "data.sqlite",
+      "sizeBytes": 366854314,
+      "createdAt": 1763859480000,
+      "modifiedAt": 1772087155054,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_065",
+      "vaultId": "vlt_1_1",
+      "parentId": "n_1_1_research",
+      "kind": "file",
+      "name": "findings.pdf",
+      "sizeBytes": 16657027,
+      "createdAt": 1762401420000,
+      "modifiedAt": 1763152205346,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_poster",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "poster.hdr",
+      "sizeBytes": 432013312,
+      "createdAt": 1764769440000,
+      "modifiedAt": 1776042429281,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_hero",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "hero.mp4",
+      "sizeBytes": 2040109466,
+      "createdAt": 1780398660000,
+      "modifiedAt": 1781695706976,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_justin",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_moodboard",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "moodboard.fig",
+      "sizeBytes": 33555551,
+      "createdAt": 1781343900000,
+      "modifiedAt": 1789213860000,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_palette",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "palette.ase",
+      "sizeBytes": 3915,
+      "createdAt": 1772968980000,
+      "modifiedAt": 1774650355019,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_066",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "launch-plan.docx",
+      "sizeBytes": 3911089,
+      "createdAt": 1772070240000,
+      "modifiedAt": 1775985239617,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_067",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "budget.xlsx",
+      "sizeBytes": 6111794,
+      "createdAt": 1780493220000,
+      "modifiedAt": 1783124017089,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_priya",
+        "peer_maya",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_068",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "pitch.pptx",
+      "sizeBytes": 16378226,
+      "createdAt": 1784104140000,
+      "modifiedAt": 1784486266689,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_069",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "README.md",
+      "sizeBytes": 7746,
+      "createdAt": 1769884920000,
+      "modifiedAt": 1789211100000,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_070",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "logo.svg",
+      "sizeBytes": 42415,
+      "createdAt": 1772054580000,
+      "modifiedAt": 1773605461408,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_071",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "icons.sketch",
+      "sizeBytes": 52164969,
+      "createdAt": 1771675380000,
+      "modifiedAt": 1781103449063,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_072",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "fonts.zip",
+      "sizeBytes": 2964893863,
+      "createdAt": 1788611160000,
+      "modifiedAt": 1788861402899,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_priya",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_073",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "type-scale.json",
+      "sizeBytes": 39778,
+      "createdAt": 1772471820000,
+      "modifiedAt": 1773053890364,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_074",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "brand-voice.txt",
+      "sizeBytes": 46594,
+      "createdAt": 1775418600000,
+      "modifiedAt": 1776250147294,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_075",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "campaign.key",
+      "sizeBytes": 419187719,
+      "createdAt": 1765167480000,
+      "modifiedAt": 1780374969251,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_076",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "site.html",
+      "sizeBytes": 50833,
+      "createdAt": 1776369180000,
+      "modifiedAt": 1780081133185,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_077",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "styles.css",
+      "sizeBytes": 53415,
+      "createdAt": 1767162600000,
+      "modifiedAt": 1777850717293,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_priya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_078",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "app.tsx",
+      "sizeBytes": 19508,
+      "createdAt": 1786399680000,
+      "modifiedAt": 1788206003437,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_079",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "build.py",
+      "sizeBytes": 28521,
+      "createdAt": 1780944600000,
+      "modifiedAt": 1781416627699,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_080",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "notes.md",
+      "sizeBytes": 17710,
+      "createdAt": 1782871260000,
+      "modifiedAt": 1784527255277,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_081",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "photo-001.heic",
+      "sizeBytes": 1287447,
+      "createdAt": 1771316040000,
+      "modifiedAt": 1772275438085,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_082",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "render.blend",
+      "sizeBytes": 144040090,
+      "createdAt": 1760183040000,
+      "modifiedAt": 1761043549821,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_083",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "model.glb",
+      "sizeBytes": 280222574,
+      "createdAt": 1756812120000,
+      "modifiedAt": 1758849231130,
+      "createdBy": "peer_priya",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_priya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_084",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "soundtrack.wav",
+      "sizeBytes": 109692985,
+      "createdAt": 1772754840000,
+      "modifiedAt": 1775903975483,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_085",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "invoice.pdf",
+      "sizeBytes": 11314590,
+      "createdAt": 1770967380000,
+      "modifiedAt": 1776811607964,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_1_086",
+      "vaultId": "vlt_1_1",
+      "parentId": "root_vlt_1_1",
+      "kind": "file",
+      "name": "backup.dmg",
+      "sizeBytes": 2746456529,
+      "createdAt": 1777367820000,
+      "modifiedAt": 1778334075357,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "root_vlt_1_2",
+      "vaultId": "vlt_1_2",
+      "parentId": null,
+      "kind": "folder",
+      "name": "Hackathon Build",
+      "sizeBytes": 3216189097,
+      "createdAt": 1783929720000,
+      "modifiedAt": 1789214100000,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_justin",
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_lena",
+        "peer_omar"
+      ],
+      "childCount": 12
+    },
+    {
+      "id": "n_1_2_001",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "folder",
+      "name": "src",
+      "sizeBytes": 416819906,
+      "createdAt": 1786477080000,
+      "modifiedAt": 1789210800000,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": "violet",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_justin",
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_lena",
+        "peer_omar"
+      ],
+      "childCount": 31
+    },
+    {
+      "id": "n_1_2_002",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "index.ts",
+      "sizeBytes": 18769,
+      "createdAt": 1786840920000,
+      "modifiedAt": 1787188908860,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_003",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "App.tsx",
+      "sizeBytes": 40340,
+      "createdAt": 1787056500000,
+      "modifiedAt": 1789210800000,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_004",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "main.rs",
+      "sizeBytes": 52314,
+      "createdAt": 1788712500000,
+      "modifiedAt": 1788867180384,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_005",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "lib.rs",
+      "sizeBytes": 41849,
+      "createdAt": 1786615140000,
+      "modifiedAt": 1786884389361,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_006",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "store.ts",
+      "sizeBytes": 45985,
+      "createdAt": 1788882420000,
+      "modifiedAt": 1788914860503,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_omar",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_007",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "styles.css",
+      "sizeBytes": 38723,
+      "createdAt": 1789025760000,
+      "modifiedAt": 1789173393147,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_008",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "types.d.ts",
+      "sizeBytes": 33419,
+      "createdAt": 1787846520000,
+      "modifiedAt": 1787917608734,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_009",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "worker.js",
+      "sizeBytes": 34148,
+      "createdAt": 1787628180000,
+      "modifiedAt": 1787834086538,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_010",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "utils.mjs",
+      "sizeBytes": 41121,
+      "createdAt": 1787843760000,
+      "modifiedAt": 1788005361437,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_justin",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_011",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "config.cjs",
+      "sizeBytes": 44235,
+      "createdAt": 1788585060000,
+      "modifiedAt": 1788832434838,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_012",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "schema.graphql",
+      "sizeBytes": 57494,
+      "createdAt": 1788168900000,
+      "modifiedAt": 1788387642638,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_013",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "query.sql",
+      "sizeBytes": 415701489,
+      "createdAt": 1787680860000,
+      "modifiedAt": 1788809094706,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_justin",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_014",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "handler.go",
+      "sizeBytes": 61497,
+      "createdAt": 1787874960000,
+      "modifiedAt": 1788166077661,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_015",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "service.java",
+      "sizeBytes": 15418,
+      "createdAt": 1788146700000,
+      "modifiedAt": 1788231170274,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_016",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "view.kt",
+      "sizeBytes": 66504,
+      "createdAt": 1788388800000,
+      "modifiedAt": 1788471052525,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_017",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "model.swift",
+      "sizeBytes": 7352,
+      "createdAt": 1786652880000,
+      "modifiedAt": 1787832600022,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_omar",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_018",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "script.rb",
+      "sizeBytes": 31857,
+      "createdAt": 1788317340000,
+      "modifiedAt": 1788581068125,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_019",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "app.php",
+      "sizeBytes": 41489,
+      "createdAt": 1787868540000,
+      "modifiedAt": 1788472070590,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_020",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "main.c",
+      "sizeBytes": 26854,
+      "createdAt": 1787523180000,
+      "modifiedAt": 1788141593275,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_021",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "engine.cpp",
+      "sizeBytes": 45083,
+      "createdAt": 1787080920000,
+      "modifiedAt": 1787246176240,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_022",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "header.h",
+      "sizeBytes": 10152,
+      "createdAt": 1787685120000,
+      "modifiedAt": 1787927141771,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_023",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "program.cs",
+      "sizeBytes": 23055,
+      "createdAt": 1787801640000,
+      "modifiedAt": 1787875021537,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_024",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "main.dart",
+      "sizeBytes": 2853,
+      "createdAt": 1788451080000,
+      "modifiedAt": 1788451151569,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_justin",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_025",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "script.lua",
+      "sizeBytes": 54492,
+      "createdAt": 1788506640000,
+      "modifiedAt": 1788745322870,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_026",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "module.scala",
+      "sizeBytes": 13226,
+      "createdAt": 1786647060000,
+      "modifiedAt": 1787973513649,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_027",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "notebook.ipynb",
+      "sizeBytes": 58361,
+      "createdAt": 1786968780000,
+      "modifiedAt": 1786988279406,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_028",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "tool.pl",
+      "sizeBytes": 11043,
+      "createdAt": 1786996740000,
+      "modifiedAt": 1787414477464,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_029",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "shell.sh",
+      "sizeBytes": 64145,
+      "createdAt": 1787821440000,
+      "modifiedAt": 1788382160386,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_justin",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_030",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "task.ps1",
+      "sizeBytes": 33055,
+      "createdAt": 1788397260000,
+      "modifiedAt": 1788506319167,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_031",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "Makefile",
+      "sizeBytes": 56273,
+      "createdAt": 1787041020000,
+      "modifiedAt": 1788633910445,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_032",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_001",
+      "kind": "file",
+      "name": "Dockerfile",
+      "sizeBytes": 47311,
+      "createdAt": 1787047680000,
+      "modifiedAt": 1787182573710,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_033",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "folder",
+      "name": "docs",
+      "sizeBytes": 262912,
+      "createdAt": 1785025860000,
+      "modifiedAt": 1788640368067,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_lena",
+      "color": "teal",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_justin",
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_lena",
+        "peer_omar"
+      ],
+      "childCount": 5
+    },
+    {
+      "id": "n_1_2_034",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_033",
+      "kind": "file",
+      "name": "README.md",
+      "sizeBytes": 42082,
+      "createdAt": 1786191720000,
+      "modifiedAt": 1786436594545,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_035",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_033",
+      "kind": "file",
+      "name": "CHANGELOG.md",
+      "sizeBytes": 5604,
+      "createdAt": 1787716440000,
+      "modifiedAt": 1787922598728,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_036",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_033",
+      "kind": "file",
+      "name": "LICENSE",
+      "sizeBytes": 75670,
+      "createdAt": 1785310080000,
+      "modifiedAt": 1786894360832,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_037",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_033",
+      "kind": "file",
+      "name": "api.yaml",
+      "sizeBytes": 66649,
+      "createdAt": 1788067440000,
+      "modifiedAt": 1788345457625,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_038",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_033",
+      "kind": "file",
+      "name": "openapi.json",
+      "sizeBytes": 72907,
+      "createdAt": 1788491880000,
+      "modifiedAt": 1788640368067,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_039",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "folder",
+      "name": "assets",
+      "sizeBytes": 21562457,
+      "createdAt": 1787336580000,
+      "modifiedAt": 1789008375523,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_omar",
+      "color": "amber",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_justin",
+        "peer_aaryaman",
+        "peer_kenji",
+        "peer_lena",
+        "peer_omar"
+      ],
+      "childCount": 8
+    },
+    {
+      "id": "n_1_2_040",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_039",
+      "kind": "file",
+      "name": "icon.png",
+      "sizeBytes": 12183703,
+      "createdAt": 1787643900000,
+      "modifiedAt": 1787694054918,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_041",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_039",
+      "kind": "file",
+      "name": "hero.webp",
+      "sizeBytes": 4102590,
+      "createdAt": 1787512500000,
+      "modifiedAt": 1787532140539,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_042",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_039",
+      "kind": "file",
+      "name": "logo.svg",
+      "sizeBytes": 64271,
+      "createdAt": 1788953820000,
+      "modifiedAt": 1788992702555,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_043",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_039",
+      "kind": "file",
+      "name": "loader.gif",
+      "sizeBytes": 4811800,
+      "createdAt": 1788361740000,
+      "modifiedAt": 1788380221360,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_044",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_039",
+      "kind": "file",
+      "name": "favicon.ico",
+      "sizeBytes": 48117,
+      "createdAt": 1788341820000,
+      "modifiedAt": 1788439157196,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_045",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_039",
+      "kind": "file",
+      "name": "font.woff2",
+      "sizeBytes": 59028,
+      "createdAt": 1787765820000,
+      "modifiedAt": 1788008535380,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_046",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_039",
+      "kind": "file",
+      "name": "font.ttf",
+      "sizeBytes": 50619,
+      "createdAt": 1788189600000,
+      "modifiedAt": 1788236975529,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_047",
+      "vaultId": "vlt_1_2",
+      "parentId": "n_1_2_039",
+      "kind": "file",
+      "name": "font.otf",
+      "sizeBytes": 242329,
+      "createdAt": 1788992820000,
+      "modifiedAt": 1789008375523,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_048",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": "package.json",
+      "sizeBytes": 68473,
+      "createdAt": 1787497680000,
+      "modifiedAt": 1789214100000,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_049",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": "Cargo.toml",
+      "sizeBytes": 3344,
+      "createdAt": 1786406880000,
+      "modifiedAt": 1786512021763,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_050",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": "tsconfig.json",
+      "sizeBytes": 53139,
+      "createdAt": 1784961780000,
+      "modifiedAt": 1785701811997,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_051",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": ".env",
+      "sizeBytes": 41370,
+      "createdAt": 1787174460000,
+      "modifiedAt": 1787201637556,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_omar",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_052",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": ".gitignore",
+      "sizeBytes": 78940,
+      "createdAt": 1784805480000,
+      "modifiedAt": 1785971429226,
+      "createdBy": "peer_justin",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_053",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": "pnpm-lock.yaml",
+      "sizeBytes": 21717,
+      "createdAt": 1789003500000,
+      "modifiedAt": 1789017812914,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_justin",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_054",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": "vite.config.ts",
+      "sizeBytes": 54729,
+      "createdAt": 1785208920000,
+      "modifiedAt": 1786069312129,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji",
+        "peer_lena",
+        "peer_justin"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_055",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": "tauri.conf.json",
+      "sizeBytes": 55086,
+      "createdAt": 1788594960000,
+      "modifiedAt": 1788613235738,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_2_056",
+      "vaultId": "vlt_1_2",
+      "parentId": "root_vlt_1_2",
+      "kind": "file",
+      "name": "build.zip",
+      "sizeBytes": 2777167024,
+      "createdAt": 1787872680000,
+      "modifiedAt": 1787906321807,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "root_vlt_1_3",
+      "vaultId": "vlt_1_3",
+      "parentId": null,
+      "kind": "folder",
+      "name": "Family Photos",
+      "sizeBytes": 21269696973,
+      "createdAt": 1756376220000,
+      "modifiedAt": 1789212180000,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_aaryaman"
+      ],
+      "childCount": 4
+    },
+    {
+      "id": "n_1_3_001",
+      "vaultId": "vlt_1_3",
+      "parentId": "root_vlt_1_3",
+      "kind": "folder",
+      "name": "2024",
+      "sizeBytes": 7438256119,
+      "createdAt": 1760309880000,
+      "modifiedAt": 1788718307882,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": "pink",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_aaryaman"
+      ],
+      "childCount": 12
+    },
+    {
+      "id": "n_1_3_002",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2401.heic",
+      "sizeBytes": 11094270,
+      "createdAt": 1770338040000,
+      "modifiedAt": 1775053286149,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_003",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2402.jpg",
+      "sizeBytes": 4214512,
+      "createdAt": 1765608840000,
+      "modifiedAt": 1770177893619,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_004",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2403.png",
+      "sizeBytes": 8455804,
+      "createdAt": 1781547600000,
+      "modifiedAt": 1782524965370,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_005",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2404.raw",
+      "sizeBytes": 9360954,
+      "createdAt": 1788647520000,
+      "modifiedAt": 1788718307882,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_006",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2405.dng",
+      "sizeBytes": 7928436,
+      "createdAt": 1780323900000,
+      "modifiedAt": 1783191228484,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_007",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2406.cr2",
+      "sizeBytes": 9910396,
+      "createdAt": 1777124940000,
+      "modifiedAt": 1777760232138,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_008",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2407.mov",
+      "sizeBytes": 4100132738,
+      "createdAt": 1764023880000,
+      "modifiedAt": 1773993993523,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_009",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2408.mp4",
+      "sizeBytes": 3261783632,
+      "createdAt": 1765614300000,
+      "modifiedAt": 1768143350524,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_010",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2409.gif",
+      "sizeBytes": 12520994,
+      "createdAt": 1774914900000,
+      "modifiedAt": 1776421337407,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_011",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2410.tiff",
+      "sizeBytes": 3553357,
+      "createdAt": 1777190640000,
+      "modifiedAt": 1778287976289,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_012",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2411.arw",
+      "sizeBytes": 7238552,
+      "createdAt": 1760860440000,
+      "modifiedAt": 1764290940550,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_013",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_001",
+      "kind": "file",
+      "name": "IMG_2412.nef",
+      "sizeBytes": 2062474,
+      "createdAt": 1788437700000,
+      "modifiedAt": 1788536364279,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_014",
+      "vaultId": "vlt_1_3",
+      "parentId": "root_vlt_1_3",
+      "kind": "folder",
+      "name": "2025",
+      "sizeBytes": 8029662806,
+      "createdAt": 1784579460000,
+      "modifiedAt": 1788993015634,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": "amber",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_aaryaman"
+      ],
+      "childCount": 12
+    },
+    {
+      "id": "n_1_3_015",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2501.heic",
+      "sizeBytes": 5250933,
+      "createdAt": 1787920200000,
+      "modifiedAt": 1787944396265,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_016",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2502.jpg",
+      "sizeBytes": 1505835,
+      "createdAt": 1786417620000,
+      "modifiedAt": 1787494255985,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_017",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2503.png",
+      "sizeBytes": 5503890,
+      "createdAt": 1788798000000,
+      "modifiedAt": 1788993015634,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_018",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2504.dng",
+      "sizeBytes": 11934802,
+      "createdAt": 1785014580000,
+      "modifiedAt": 1785264363786,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_019",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2505.mov",
+      "sizeBytes": 333723596,
+      "createdAt": 1786799460000,
+      "modifiedAt": 1787647949206,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_020",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2506.mp4",
+      "sizeBytes": 4010928733,
+      "createdAt": 1786563660000,
+      "modifiedAt": 1786753191711,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_021",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2507.avi",
+      "sizeBytes": 2596766941,
+      "createdAt": 1788326340000,
+      "modifiedAt": 1788552928846,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_022",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2508.m4v",
+      "sizeBytes": 1033629367,
+      "createdAt": 1788564360000,
+      "modifiedAt": 1788873320546,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_023",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2509.gif",
+      "sizeBytes": 10297833,
+      "createdAt": 1785165300000,
+      "modifiedAt": 1785435776143,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_024",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2510.heic",
+      "sizeBytes": 3509969,
+      "createdAt": 1787909340000,
+      "modifiedAt": 1788000067445,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_025",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2511.jpg",
+      "sizeBytes": 5581793,
+      "createdAt": 1788285300000,
+      "modifiedAt": 1788823221192,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_026",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_014",
+      "kind": "file",
+      "name": "IMG_2512.raw",
+      "sizeBytes": 11029114,
+      "createdAt": 1785633720000,
+      "modifiedAt": 1786427135377,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_027",
+      "vaultId": "vlt_1_3",
+      "parentId": "root_vlt_1_3",
+      "kind": "folder",
+      "name": "2026",
+      "sizeBytes": 5801715395,
+      "createdAt": 1758345780000,
+      "modifiedAt": 1788247971967,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": "teal",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_maya",
+        "peer_aaryaman"
+      ],
+      "childCount": 11
+    },
+    {
+      "id": "n_1_3_028",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2601.heic",
+      "sizeBytes": 10747750,
+      "createdAt": 1784850000000,
+      "modifiedAt": 1785072722195,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_029",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2602.jpg",
+      "sizeBytes": 9023127,
+      "createdAt": 1773763200000,
+      "modifiedAt": 1776471573990,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_030",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2603.png",
+      "sizeBytes": 8790346,
+      "createdAt": 1778566080000,
+      "modifiedAt": 1783683971347,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_031",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2604.dng",
+      "sizeBytes": 6665600,
+      "createdAt": 1779817740000,
+      "modifiedAt": 1788247971967,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_032",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2605.cr2",
+      "sizeBytes": 3170491,
+      "createdAt": 1761138900000,
+      "modifiedAt": 1763745950449,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_033",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2606.mov",
+      "sizeBytes": 2620107015,
+      "createdAt": 1784183040000,
+      "modifiedAt": 1785205471675,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_034",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2607.mp4",
+      "sizeBytes": 3122238672,
+      "createdAt": 1764208080000,
+      "modifiedAt": 1778393121067,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_035",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2608.gif",
+      "sizeBytes": 5484549,
+      "createdAt": 1787345340000,
+      "modifiedAt": 1788183211078,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_036",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2609.tiff",
+      "sizeBytes": 11383539,
+      "createdAt": 1781985660000,
+      "modifiedAt": 1782067772806,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_037",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2610.webp",
+      "sizeBytes": 1509622,
+      "createdAt": 1786612380000,
+      "modifiedAt": 1786628168055,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_038",
+      "vaultId": "vlt_1_3",
+      "parentId": "n_1_3_027",
+      "kind": "file",
+      "name": "IMG_2611.avif",
+      "sizeBytes": 2594684,
+      "createdAt": 1783947360000,
+      "modifiedAt": 1783962004722,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_maya",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_1_3_039",
+      "vaultId": "vlt_1_3",
+      "parentId": "root_vlt_1_3",
+      "kind": "file",
+      "name": "album.md",
+      "sizeBytes": 62653,
+      "createdAt": 1783401660000,
+      "modifiedAt": 1789212180000,
+      "createdBy": "peer_maya",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_maya"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "root_vlt_2_1",
+      "vaultId": "vlt_2_1",
+      "parentId": null,
+      "kind": "folder",
+      "name": "Research Papers",
+      "sizeBytes": 1887935619,
+      "createdAt": 1762367640000,
+      "modifiedAt": 1789211340000,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_aaryaman",
+        "peer_sofia",
+        "peer_omar"
+      ],
+      "childCount": 3
+    },
+    {
+      "id": "n_2_1_001",
+      "vaultId": "vlt_2_1",
+      "parentId": "root_vlt_2_1",
+      "kind": "folder",
+      "name": "Drafts",
+      "sizeBytes": 22529679,
+      "createdAt": 1762632000000,
+      "modifiedAt": 1789211340000,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_sofia",
+      "color": "coral",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_aaryaman",
+        "peer_sofia",
+        "peer_omar"
+      ],
+      "childCount": 9
+    },
+    {
+      "id": "n_2_1_002",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "draft-alpha.tex",
+      "sizeBytes": 75296,
+      "createdAt": 1765303800000,
+      "modifiedAt": 1783125846137,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_003",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "draft-alpha.pdf",
+      "sizeBytes": 4182798,
+      "createdAt": 1782190560000,
+      "modifiedAt": 1783163256691,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_004",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "abstract.md",
+      "sizeBytes": 30706,
+      "createdAt": 1789009140000,
+      "modifiedAt": 1789211340000,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_005",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "refs.bib",
+      "sizeBytes": 81120,
+      "createdAt": 1763149320000,
+      "modifiedAt": 1763282214616,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_sofia",
+        "peer_omar",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_006",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "revision.docx",
+      "sizeBytes": 18036037,
+      "createdAt": 1787203200000,
+      "modifiedAt": 1787709566580,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_sofia",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_007",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "latex-build.log",
+      "sizeBytes": 51755,
+      "createdAt": 1774957020000,
+      "modifiedAt": 1775072805638,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_008",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "reviewer.diff",
+      "sizeBytes": 10472,
+      "createdAt": 1773488340000,
+      "modifiedAt": 1782439385126,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_sofia",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_009",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "thesis.sty",
+      "sizeBytes": 23220,
+      "createdAt": 1768977840000,
+      "modifiedAt": 1779604328051,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_010",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_001",
+      "kind": "file",
+      "name": "ieee.cls",
+      "sizeBytes": 38275,
+      "createdAt": 1770725280000,
+      "modifiedAt": 1777461822964,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_011",
+      "vaultId": "vlt_2_1",
+      "parentId": "root_vlt_2_1",
+      "kind": "folder",
+      "name": "Published",
+      "sizeBytes": 61212869,
+      "createdAt": 1780927860000,
+      "modifiedAt": 1788760600412,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_lena",
+      "color": "green",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_aaryaman",
+        "peer_sofia",
+        "peer_omar"
+      ],
+      "childCount": 9
+    },
+    {
+      "id": "n_2_1_012",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "paper-2025.pdf",
+      "sizeBytes": 7967742,
+      "createdAt": 1787971560000,
+      "modifiedAt": 1788113301093,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_013",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "paper-2025.tex",
+      "sizeBytes": 48886,
+      "createdAt": 1782417900000,
+      "modifiedAt": 1782672958752,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_omar",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_014",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "bibliography.bib",
+      "sizeBytes": 7857,
+      "createdAt": 1788041820000,
+      "modifiedAt": 1788639576931,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_015",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "camera-ready.docx",
+      "sizeBytes": 18804614,
+      "createdAt": 1786660440000,
+      "modifiedAt": 1787409067587,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_sofia",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_016",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "poster-icml.pdf",
+      "sizeBytes": 12302024,
+      "createdAt": 1783776840000,
+      "modifiedAt": 1784066600575,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_sofia",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_sofia",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_017",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "supplement.md",
+      "sizeBytes": 20194,
+      "createdAt": 1781840700000,
+      "modifiedAt": 1786403416863,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_sofia",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_018",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "book-chapter.epub",
+      "sizeBytes": 2201140,
+      "createdAt": 1782536640000,
+      "modifiedAt": 1783374267454,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_019",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "scan.djvu",
+      "sizeBytes": 19854094,
+      "createdAt": 1784130600000,
+      "modifiedAt": 1784145464804,
+      "createdBy": "peer_lena",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_020",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_011",
+      "kind": "file",
+      "name": "ieee.bst",
+      "sizeBytes": 6318,
+      "createdAt": 1786409280000,
+      "modifiedAt": 1788760600412,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_021",
+      "vaultId": "vlt_2_1",
+      "parentId": "root_vlt_2_1",
+      "kind": "folder",
+      "name": "Datasets",
+      "sizeBytes": 1804193071,
+      "createdAt": 1770418380000,
+      "modifiedAt": 1788494774053,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_lena",
+      "color": "blue",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_aaryaman",
+        "peer_sofia",
+        "peer_omar"
+      ],
+      "childCount": 10
+    },
+    {
+      "id": "n_2_1_022",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "responses.csv",
+      "sizeBytes": 384767810,
+      "createdAt": 1784320860000,
+      "modifiedAt": 1785822873818,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_023",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "cohort.xlsx",
+      "sizeBytes": 3903951,
+      "createdAt": 1784039580000,
+      "modifiedAt": 1784047489719,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_024",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "events.parquet",
+      "sizeBytes": 123065086,
+      "createdAt": 1775835000000,
+      "modifiedAt": 1782053409791,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_omar",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_025",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "signals.h5",
+      "sizeBytes": 196147951,
+      "createdAt": 1785244740000,
+      "modifiedAt": 1785267889330,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_026",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "matrix.mat",
+      "sizeBytes": 497975727,
+      "createdAt": 1783778700000,
+      "modifiedAt": 1788494774053,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_027",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "embeddings.npy",
+      "sizeBytes": 195735766,
+      "createdAt": 1770767700000,
+      "modifiedAt": 1782463628647,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_lena",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_028",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "model.rds",
+      "sizeBytes": 76159263,
+      "createdAt": 1781720160000,
+      "modifiedAt": 1784400903086,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_sofia",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena",
+        "peer_sofia"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_029",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "survey.sav",
+      "sizeBytes": 166768373,
+      "createdAt": 1782124860000,
+      "modifiedAt": 1782779400040,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_lena",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_omar",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_030",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "frames.feather",
+      "sizeBytes": 17915348,
+      "createdAt": 1783797960000,
+      "modifiedAt": 1784103039864,
+      "createdBy": "peer_omar",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_lena"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_1_031",
+      "vaultId": "vlt_2_1",
+      "parentId": "n_2_1_021",
+      "kind": "file",
+      "name": "index.arrow",
+      "sizeBytes": 141753796,
+      "createdAt": 1771964700000,
+      "modifiedAt": 1781475042540,
+      "createdBy": "peer_sofia",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_sofia",
+        "peer_omar"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "root_vlt_2_2",
+      "vaultId": "vlt_2_2",
+      "parentId": null,
+      "kind": "folder",
+      "name": "Backups",
+      "sizeBytes": 95244736710,
+      "createdAt": 1759404960000,
+      "modifiedAt": 1788874007364,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 2
+    },
+    {
+      "id": "n_2_2_001",
+      "vaultId": "vlt_2_2",
+      "parentId": "root_vlt_2_2",
+      "kind": "folder",
+      "name": "Weekly",
+      "sizeBytes": 32536642054,
+      "createdAt": 1764064260000,
+      "modifiedAt": 1786143575359,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": "graphite",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 12
+    },
+    {
+      "id": "n_2_2_002",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "weekly-2026-09-06.dmg",
+      "sizeBytes": 5390659789,
+      "createdAt": 1782731880000,
+      "modifiedAt": 1786143575359,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_003",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "weekly-2026-08-30.iso",
+      "sizeBytes": 6903495276,
+      "createdAt": 1779492300000,
+      "modifiedAt": 1784286896617,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_004",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "weekly-2026-08-23.zip",
+      "sizeBytes": 2060845295,
+      "createdAt": 1783946820000,
+      "modifiedAt": 1785376262839,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_005",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "weekly-2026-08-16.tar",
+      "sizeBytes": 7819127489,
+      "createdAt": 1779688560000,
+      "modifiedAt": 1784769247741,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_006",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "weekly-2026-08-09.tar.gz",
+      "sizeBytes": 3569411756,
+      "createdAt": 1765723560000,
+      "modifiedAt": 1770236687495,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_007",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "weekly-2026-08-02.tar.xz",
+      "sizeBytes": 193623347,
+      "createdAt": 1765758840000,
+      "modifiedAt": 1765760255833,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_008",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "home-index.bak",
+      "sizeBytes": 1509116182,
+      "createdAt": 1785739560000,
+      "modifiedAt": 1785951195503,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_009",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "postgres-dump.sql",
+      "sizeBytes": 311962222,
+      "createdAt": 1765474080000,
+      "modifiedAt": 1768730341320,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_010",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "ledger.db",
+      "sizeBytes": 428175468,
+      "createdAt": 1768474200000,
+      "modifiedAt": 1770960195866,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_011",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "notes.sqlite",
+      "sizeBytes": 247262368,
+      "createdAt": 1768594440000,
+      "modifiedAt": 1769566838317,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_012",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "workstation.vmdk",
+      "sizeBytes": 82267611,
+      "createdAt": 1764667920000,
+      "modifiedAt": 1781371075560,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_013",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_001",
+      "kind": "file",
+      "name": "sandbox.qcow2",
+      "sizeBytes": 4020695251,
+      "createdAt": 1773746760000,
+      "modifiedAt": 1774699147641,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_014",
+      "vaultId": "vlt_2_2",
+      "parentId": "root_vlt_2_2",
+      "kind": "folder",
+      "name": "Monthly",
+      "sizeBytes": 62708094656,
+      "createdAt": 1769560380000,
+      "modifiedAt": 1788874007364,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": "red",
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 13
+    },
+    {
+      "id": "n_2_2_015",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "disk.img",
+      "sizeBytes": 7389820749,
+      "createdAt": 1786479720000,
+      "modifiedAt": 1786692757829,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_016",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "firmware.bin",
+      "sizeBytes": 5048700033,
+      "createdAt": 1786133940000,
+      "modifiedAt": 1786348914937,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_017",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "daemon.pkg",
+      "sizeBytes": 530224521,
+      "createdAt": 1770024240000,
+      "modifiedAt": 1772596774535,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_018",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "agent_1.4.2_amd64.deb",
+      "sizeBytes": 8054588818,
+      "createdAt": 1782337620000,
+      "modifiedAt": 1782775226975,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_019",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "agent-1.4.2.x86_64.rpm",
+      "sizeBytes": 1586063381,
+      "createdAt": 1786544700000,
+      "modifiedAt": 1786669421299,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_020",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "mobile-1.4.2.apk",
+      "sizeBytes": 2765087773,
+      "createdAt": 1771282680000,
+      "modifiedAt": 1783085970278,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_021",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "installer.exe",
+      "sizeBytes": 65923557,
+      "createdAt": 1779398040000,
+      "modifiedAt": 1781919656320,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_022",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "setup.msi",
+      "sizeBytes": 7522903931,
+      "createdAt": 1788842220000,
+      "modifiedAt": 1788874007364,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_023",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "Toolbox.app",
+      "sizeBytes": 5868643471,
+      "createdAt": 1775899560000,
+      "modifiedAt": 1779678800898,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_024",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "runtime.dll",
+      "sizeBytes": 4816381813,
+      "createdAt": 1782161880000,
+      "modifiedAt": 1784488992801,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_025",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "libcore.so",
+      "sizeBytes": 3912027175,
+      "createdAt": 1785840540000,
+      "modifiedAt": 1786094088821,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman",
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_026",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "snapshot.tar.zst",
+      "sizeBytes": 6654579999,
+      "createdAt": 1776323820000,
+      "modifiedAt": 1779520635016,
+      "createdBy": "peer_aaryaman",
+      "modifiedBy": "peer_aaryaman",
+      "color": null,
+      "availability": "remote",
+      "progress": null,
+      "holders": [
+        "peer_kenji"
+      ],
+      "childCount": 0
+    },
+    {
+      "id": "n_2_2_027",
+      "vaultId": "vlt_2_2",
+      "parentId": "n_2_2_014",
+      "kind": "file",
+      "name": "journal.lz4",
+      "sizeBytes": 8493149435,
+      "createdAt": 1781324460000,
+      "modifiedAt": 1781371315702,
+      "createdBy": "peer_kenji",
+      "modifiedBy": "peer_kenji",
+      "color": null,
+      "availability": "local",
+      "progress": null,
+      "holders": [
+        "peer_aaryaman"
+      ],
+      "childCount": 0
+    }
+  ],
+  "access": [
+    {
+      "nodeId": "n_1_1_brand",
+      "inherit": false,
+      "entries": [
+        {
+          "peerId": "peer_justin",
+          "level": "editor"
+        },
+        {
+          "peerId": "peer_maya",
+          "level": "editor"
+        },
+        {
+          "peerId": "peer_kenji",
+          "level": "viewer"
+        },
+        {
+          "peerId": "peer_priya",
+          "level": "viewer"
+        }
+      ]
+    },
+    {
+      "nodeId": "n_1_1_archive",
+      "inherit": false,
+      "entries": [
+        {
+          "peerId": "peer_justin",
+          "level": "viewer"
+        },
+        {
+          "peerId": "peer_maya",
+          "level": "viewer"
+        },
+        {
+          "peerId": "peer_kenji",
+          "level": "viewer"
+        },
+        {
+          "peerId": "peer_priya",
+          "level": "viewer"
+        }
+      ]
+    },
+    {
+      "nodeId": "n_1_1_film",
+      "inherit": false,
+      "entries": [
+        {
+          "peerId": "peer_maya",
+          "level": "editor"
+        },
+        {
+          "peerId": "peer_kenji",
+          "level": "editor"
+        }
+      ]
+    },
+    {
+      "nodeId": "n_1_2_048",
+      "inherit": false,
+      "entries": [
+        {
+          "peerId": "peer_kenji",
+          "level": "editor"
+        },
+        {
+          "peerId": "peer_lena",
+          "level": "viewer"
+        },
+        {
+          "peerId": "peer_omar",
+          "level": "viewer"
+        }
+      ]
+    },
+    {
+      "nodeId": "n_1_3_027",
+      "inherit": false,
+      "entries": [
+        {
+          "peerId": "peer_aaryaman",
+          "level": "editor"
+        }
+      ]
+    },
+    {
+      "nodeId": "n_2_1_021",
+      "inherit": false,
+      "entries": [
+        {
+          "peerId": "peer_sofia",
+          "level": "editor"
+        },
+        {
+          "peerId": "peer_omar",
+          "level": "viewer"
+        },
+        {
+          "peerId": "peer_aaryaman",
+          "level": "viewer"
+        }
+      ]
+    },
+    {
+      "nodeId": "n_2_2_014",
+      "inherit": false,
+      "entries": [
+        {
+          "peerId": "peer_kenji",
+          "level": "viewer"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "id": "h_1",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_research",
+      "kind": "created",
+      "at": 1758134760000,
+      "by": "peer_priya",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_2",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_027",
+      "kind": "created",
+      "at": 1758345780000,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_3",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_projects",
+      "kind": "created",
+      "at": 1761846660000,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_4",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_brand",
+      "kind": "created",
+      "at": 1762287360000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_5",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_001",
+      "kind": "created",
+      "at": 1764064260000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_6",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_poster",
+      "kind": "created",
+      "at": 1764769440000,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_7",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_009",
+      "kind": "created",
+      "at": 1765474080000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_8",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_009",
+      "kind": "created",
+      "at": 1765614300000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_9",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_projects",
+      "kind": "colored",
+      "at": 1767320208000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": "violet",
+      "summary": "set color to violet"
+    },
+    {
+      "id": "h_10",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_010",
+      "kind": "created",
+      "at": 1768474200000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_11",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_069",
+      "kind": "created",
+      "at": 1769884920000,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_12",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_002",
+      "kind": "created",
+      "at": 1770338040000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_13",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_brand",
+      "kind": "colored",
+      "at": 1770365472000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": "coral",
+      "summary": "set color to coral"
+    },
+    {
+      "id": "h_14",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_research",
+      "kind": "colored",
+      "at": 1770566616000,
+      "by": "peer_kenji",
+      "from": null,
+      "to": "teal",
+      "summary": "set color to teal"
+    },
+    {
+      "id": "h_15",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_010",
+      "kind": "modified",
+      "at": 1770960195866,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_16",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_031",
+      "kind": "created",
+      "at": 1771964700000,
+      "by": "peer_sofia",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_17",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_palette",
+      "kind": "created",
+      "at": 1772968980000,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_18",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_001",
+      "kind": "renamed",
+      "at": 1773552006394,
+      "by": "peer_kenji",
+      "from": "old-Weekly",
+      "to": "Weekly",
+      "summary": "renamed from old-Weekly"
+    },
+    {
+      "id": "h_19",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_013",
+      "kind": "created",
+      "at": 1773746760000,
+      "by": "peer_kenji",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_20",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_projects",
+      "kind": "renamed",
+      "at": 1774162143000,
+      "by": "peer_justin",
+      "from": "Client Work",
+      "to": "Projects",
+      "summary": "renamed from Client Work"
+    },
+    {
+      "id": "h_21",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_poster",
+      "kind": "renamed",
+      "at": 1774547424000,
+      "by": "peer_maya",
+      "from": "poster-v1.hdr",
+      "to": "poster.hdr",
+      "summary": "renamed from poster-v1.hdr"
+    },
+    {
+      "id": "h_22",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_002",
+      "kind": "modified",
+      "at": 1775053286149,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_23",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_009",
+      "kind": "renamed",
+      "at": 1776322619996,
+      "by": "peer_aaryaman",
+      "from": "old-IMG_2408.mp4",
+      "to": "IMG_2408.mp4",
+      "summary": "renamed from old-IMG_2408.mp4"
+    },
+    {
+      "id": "h_24",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_brand",
+      "kind": "access",
+      "at": 1778443584000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": "peer_kenji",
+      "summary": "gave Kenji view access"
+    },
+    {
+      "id": "h_25",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_archive",
+      "kind": "created",
+      "at": 1778671980000,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_26",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_031",
+      "kind": "renamed",
+      "at": 1778793370789,
+      "by": "peer_aaryaman",
+      "from": "old-index.arrow",
+      "to": "index.arrow",
+      "summary": "renamed from old-index.arrow"
+    },
+    {
+      "id": "h_27",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_brand",
+      "kind": "access",
+      "at": 1778982124800,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": "peer_justin",
+      "summary": "gave Justin edit access"
+    },
+    {
+      "id": "h_28",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_poster",
+      "kind": "moved",
+      "at": 1779436416000,
+      "by": "peer_kenji",
+      "from": "Archive",
+      "to": "Design Assets",
+      "summary": "moved from Archive to Design Assets"
+    },
+    {
+      "id": "h_29",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_hero",
+      "kind": "created",
+      "at": 1780398660000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_30",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_palette",
+      "kind": "duplicated",
+      "at": 1781091690000,
+      "by": "peer_maya",
+      "from": "palette.ase",
+      "to": "palette copy.ase",
+      "summary": "duplicated from palette.ase"
+    },
+    {
+      "id": "h_31",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_moodboard",
+      "kind": "created",
+      "at": 1781343900000,
+      "by": "peer_justin",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_32",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_hero",
+      "kind": "modified",
+      "at": 1781695706976,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_33",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_028",
+      "kind": "created",
+      "at": 1781720160000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_34",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_film",
+      "kind": "created",
+      "at": 1782013740000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_35",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_013",
+      "kind": "created",
+      "at": 1782417900000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_36",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_030",
+      "kind": "created",
+      "at": 1783797960000,
+      "by": "peer_omar",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_37",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_archive",
+      "kind": "access",
+      "at": 1783943190000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": "peer_maya",
+      "summary": "gave Maya view access"
+    },
+    {
+      "id": "h_38",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_023",
+      "kind": "created",
+      "at": 1784039580000,
+      "by": "peer_omar",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_39",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_palette",
+      "kind": "moved",
+      "at": 1784340774000,
+      "by": "peer_justin",
+      "from": "Brand",
+      "to": "Design Assets",
+      "summary": "moved from Brand to Design Assets"
+    },
+    {
+      "id": "h_40",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_film",
+      "kind": "colored",
+      "at": 1784533971000,
+      "by": "peer_maya",
+      "from": null,
+      "to": "blue",
+      "summary": "set color to blue"
+    },
+    {
+      "id": "h_41",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_009",
+      "kind": "renamed",
+      "at": 1784833969459,
+      "by": "peer_aaryaman",
+      "from": "old-postgres-dump.sql",
+      "to": "postgres-dump.sql",
+      "summary": "renamed from old-postgres-dump.sql"
+    },
+    {
+      "id": "h_42",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_054",
+      "kind": "created",
+      "at": 1785208920000,
+      "by": "peer_omar",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_43",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_013",
+      "kind": "renamed",
+      "at": 1785722375185,
+      "by": "peer_kenji",
+      "from": "old-sandbox.qcow2",
+      "to": "sandbox.qcow2",
+      "summary": "renamed from old-sandbox.qcow2"
+    },
+    {
+      "id": "h_44",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_025",
+      "kind": "created",
+      "at": 1785840540000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_45",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_film",
+      "kind": "access",
+      "at": 1785974103000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": "peer_maya",
+      "summary": "gave Maya edit access"
+    },
+    {
+      "id": "h_46",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_054",
+      "kind": "modified",
+      "at": 1786069312129,
+      "by": "peer_omar",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_47",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_025",
+      "kind": "modified",
+      "at": 1786094088821,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_48",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_016",
+      "kind": "created",
+      "at": 1786133940000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_49",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_020",
+      "kind": "created",
+      "at": 1786409280000,
+      "by": "peer_sofia",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_50",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_016",
+      "kind": "created",
+      "at": 1786417620000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_51",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_archive",
+      "kind": "deleted",
+      "at": 1786473370800,
+      "by": "peer_justin",
+      "from": "old-draft.psd",
+      "to": null,
+      "summary": "deleted old-draft.psd"
+    },
+    {
+      "id": "h_52",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_001",
+      "kind": "created",
+      "at": 1786477080000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_53",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_030",
+      "kind": "moved",
+      "at": 1786507215118,
+      "by": "peer_sofia",
+      "from": "Inbox",
+      "to": "Datasets",
+      "summary": "moved from Inbox to Datasets"
+    },
+    {
+      "id": "h_54",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_032",
+      "kind": "created",
+      "at": 1787047680000,
+      "by": "peer_kenji",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_55",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_028",
+      "kind": "downloaded",
+      "at": 1787157529956,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "downloaded to this Mac"
+    },
+    {
+      "id": "h_56",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_032",
+      "kind": "modified",
+      "at": 1787182573710,
+      "by": "peer_lena",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_57",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_poster",
+      "kind": "downloaded",
+      "at": 1787258803200,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "downloaded to this Mac"
+    },
+    {
+      "id": "h_58",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_023",
+      "kind": "duplicated",
+      "at": 1787281632664,
+      "by": "peer_omar",
+      "from": "cohort.xlsx",
+      "to": "cohort.xlsx copy",
+      "summary": "duplicated from cohort.xlsx"
+    },
+    {
+      "id": "h_59",
+      "vaultId": "vlt_2_2",
+      "nodeId": "n_2_2_016",
+      "kind": "colored",
+      "at": 1787298863552,
+      "by": "peer_kenji",
+      "from": null,
+      "to": "amber",
+      "summary": "set color to amber"
+    },
+    {
+      "id": "h_60",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_035",
+      "kind": "created",
+      "at": 1787345340000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_61",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_hero",
+      "kind": "duplicated",
+      "at": 1787451252000,
+      "by": "peer_justin",
+      "from": "hero.mp4",
+      "to": "hero copy.mp4",
+      "summary": "duplicated from hero.mp4"
+    },
+    {
+      "id": "h_62",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_016",
+      "kind": "duplicated",
+      "at": 1787558138026,
+      "by": "peer_aaryaman",
+      "from": "IMG_2502.jpg",
+      "to": "IMG_2502.jpg copy",
+      "summary": "duplicated from IMG_2502.jpg"
+    },
+    {
+      "id": "h_63",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_moodboard",
+      "kind": "downloaded",
+      "at": 1788033825000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "downloaded to this Mac"
+    },
+    {
+      "id": "h_64",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_027",
+      "kind": "modified",
+      "at": 1788247971967,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_65",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_018",
+      "kind": "created",
+      "at": 1788317340000,
+      "by": "peer_omar",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_66",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_035",
+      "kind": "duplicated",
+      "at": 1788343145815,
+      "by": "peer_maya",
+      "from": "IMG_2608.gif",
+      "to": "IMG_2608.gif copy",
+      "summary": "duplicated from IMG_2608.gif"
+    },
+    {
+      "id": "h_67",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_030",
+      "kind": "created",
+      "at": 1788397260000,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_68",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_013",
+      "kind": "created",
+      "at": 1788437700000,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_69",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_025",
+      "kind": "created",
+      "at": 1788506640000,
+      "by": "peer_kenji",
+      "from": null,
+      "to": null,
+      "summary": "created"
+    },
+    {
+      "id": "h_70",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_001",
+      "kind": "duplicated",
+      "at": 1788615124097,
+      "by": "peer_kenji",
+      "from": "src",
+      "to": "src copy",
+      "summary": "duplicated from src"
+    },
+    {
+      "id": "h_71",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_020",
+      "kind": "modified",
+      "at": 1788760600412,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_72",
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_013",
+      "kind": "duplicated",
+      "at": 1788813629759,
+      "by": "peer_omar",
+      "from": "paper-2025.tex",
+      "to": "paper-2025.tex copy",
+      "summary": "duplicated from paper-2025.tex"
+    },
+    {
+      "id": "h_73",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_025",
+      "kind": "renamed",
+      "at": 1788819270663,
+      "by": "peer_aaryaman",
+      "from": "old-script.lua",
+      "to": "script.lua",
+      "summary": "renamed from old-script.lua"
+    },
+    {
+      "id": "h_74",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_018",
+      "kind": "downloaded",
+      "at": 1788860550740,
+      "by": "peer_aaryaman",
+      "from": null,
+      "to": null,
+      "summary": "downloaded to this Mac"
+    },
+    {
+      "id": "h_75",
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_030",
+      "kind": "colored",
+      "at": 1788970897381,
+      "by": "peer_justin",
+      "from": null,
+      "to": "amber",
+      "summary": "set color to amber"
+    },
+    {
+      "id": "h_76",
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_013",
+      "kind": "moved",
+      "at": 1789030538103,
+      "by": "peer_aaryaman",
+      "from": "Inbox",
+      "to": "2024",
+      "summary": "moved from Inbox to 2024"
+    },
+    {
+      "id": "h_77",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_069",
+      "kind": "modified",
+      "at": 1789211100000,
+      "by": "peer_priya",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    },
+    {
+      "id": "h_78",
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_moodboard",
+      "kind": "modified",
+      "at": 1789213860000,
+      "by": "peer_maya",
+      "from": null,
+      "to": null,
+      "summary": "modified"
+    }
+  ],
+  "recents": [
+    {
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_048",
+      "at": 1789214100000
+    },
+    {
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_moodboard",
+      "at": 1789213860000
+    },
+    {
+      "vaultId": "vlt_1_3",
+      "nodeId": "n_1_3_039",
+      "at": 1789212180000
+    },
+    {
+      "vaultId": "vlt_2_1",
+      "nodeId": "n_2_1_004",
+      "at": 1789211340000
+    },
+    {
+      "vaultId": "vlt_1_1",
+      "nodeId": "n_1_1_069",
+      "at": 1789211100000
+    },
+    {
+      "vaultId": "vlt_1_2",
+      "nodeId": "n_1_2_003",
+      "at": 1789210800000
+    }
+  ],
+  "previews": {
+    "n_1_1_069": "# Design Assets\n\nEverything the studio ships from. Source lives here, exports go to Projects/.\n\n- Brand/ — marks, type, color. Ask before editing guidelines.pdf.\n- Film/ — masters are remote by default; download before scrubbing.\n- Archive/ — frozen. Read-only for everyone but the admins.\n\nNaming: kebab-case, no dates in filenames, versions live in history.\n",
+    "n_1_1_080": "Notes — week 37\n\n- Poster is finally locked. Kenji has the 412 MB HDR pinned locally.\n- Hero cut runs 8s long; Justin trimming the title card.\n- Priya is offline again (7 ops queued) — she has the type specimen.\n- Move the 2019 site zip out of Archive before the key rotation.\n",
+    "n_1_1_073": "{\n  \"base\": 15,\n  \"ratio\": 1.2,\n  \"steps\": {\n    \"caption\": 12,\n    \"body\": 15,\n    \"lead\": 18,\n    \"title\": 22,\n    \"display\": 32\n  },\n  \"family\": \"GT Walsheim\",\n  \"weights\": [400, 500]\n}\n",
+    "n_1_1_074": "Brand voice\n\nPlain. Precise. Never breathless.\n\nSay \"your files stay on your machine\", not \"revolutionary local-first paradigm\".\nNumbers beat adjectives. One idea per sentence.\nNever use exclamation marks in product copy.\n",
+    "n_1_1_079": "#!/usr/bin/env python3\n\"\"\"Export every board in the working file to 2x PNG.\"\"\"\n\nfrom pathlib import Path\n\nOUT = Path(\"exports\")\nSCALE = 2\n\n\ndef export(boards):\n    OUT.mkdir(exist_ok=True)\n    for name, board in boards.items():\n        target = OUT / f\"{name}@{SCALE}x.png\"\n        board.render(scale=SCALE).save(target)\n        print(f\"wrote {target}\")\n\n\nif __name__ == \"__main__\":\n    export(load_boards())\n",
+    "n_1_1_034": "{\n  \"coral\": \"#FF7B7B\",\n  \"violet\": \"#4E0EFF\",\n  \"mint\": \"#7BFFD6\",\n  \"amber\": \"#FFC27B\",\n  \"ink\": \"#0A0C12\",\n  \"surface\": \"#11141C\",\n  \"line\": \"#1E2430\"\n}\n",
+    "n_1_1_056": "respondent,role,years,vault_size_gb,sync_rating,offline_days\nr001,designer,4,38,4,2\nr002,engineer,9,120,5,0\nr003,producer,6,12,3,5\nr004,engineer,2,64,4,1\nr005,designer,11,210,5,0\nr006,researcher,3,9,2,8\nr007,engineer,7,95,4,1\nr008,producer,1,4,3,3\nr009,designer,5,47,5,0\nr010,researcher,8,150,4,2\n",
+    "n_1_2_034": "# quantam-fs\n\nLocal-first, serverless, post-quantum-encrypted file system with real-time\nmultiplayer editing.\n\n## Run\n\n    pnpm install\n    pnpm tauri dev\n\n## Layout\n\n    src/      React client\n    src-tauri/ Rust core: transport, crypto, replicated tree\n    docs/     protocol notes\n\nKeys are ML-KEM-768; every vault rotates weekly.\n",
+    "n_1_2_048": "{\n  \"name\": \"quantam-fs\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite\",\n    \"build\": \"tsc && vite build\",\n    \"tauri\": \"tauri\"\n  },\n  \"dependencies\": {\n    \"react\": \"19.0.0\",\n    \"react-dom\": \"19.0.0\",\n    \"motion\": \"13.0.0\",\n    \"lucide-react\": \"0.460.0\"\n  }\n}\n",
+    "n_1_1_063": "# Summary\n\nAcross 10 respondents, sync confidence tracks vault size inversely once a peer\npasses ~100 GB. Offline days cluster on producers, who hold the fewest bytes.\n\nNext: instrument queued-op depth per peer; the current proxy (offline_days)\noverstates how far behind a peer actually is.\n",
+    "n_2_1_004": "# Abstract\n\nWe describe a replicated file tree in which every operation is encrypted under a\nlattice-based scheme before it leaves the device, and in which conflict\nresolution is total: any two peers that have seen the same set of operations\nagree on the same tree, regardless of order.\n\nOur prototype sustains 4,000 ops/s per peer on commodity hardware with a median\nconvergence latency of 38 ms across a LAN of eight peers.\n"
+  }
+}

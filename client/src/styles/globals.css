@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* GT Walsheim Trial — loaded from the OS; trial licence, so no files in the repo. */
+/* GT Walsheim Trial — loaded from the OS; trial license, so no files in the repo. */
 @font-face {
   font-family: "GT Walsheim Trial";
   src: local("GT Walsheim Trial Lt"), local("GTWalsheimTrial-Lt");
@@ -50,7 +50,15 @@
 }
 
 @theme {
-  --font-sans: "GT Walsheim Trial", "GT Walsheim", -apple-system, system-ui, sans-serif;
+  /*
+   * Inter carries every word of body text — its x-height holds up at 12–13px
+   * where the geometric display face goes soft. GT Walsheim is demoted to
+   * `font-heading` and only appears where the type is large enough to earn it
+   * (docs/decisions/client-typography-inter.md).
+   */
+  --font-sans: "Inter Variable", "Inter", -apple-system, system-ui, sans-serif;
+  --font-heading:
+    "GT Walsheim Trial", "GT Walsheim", "Inter Variable", -apple-system, system-ui, sans-serif;
 
   --color-bg: #010513;
   --color-surface: #070b1b;
@@ -73,6 +81,41 @@
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
   --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/*
+ * Workspace tokens. `static` because these are read two ways — as Tailwind
+ * utilities (bg-success, rounded-tile, shadow-pop) AND as raw var() from
+ * inline styles and plain CSS rules built outside Tailwind's scanner.
+ * A plain @theme only emits the vars some utility already references, so the
+ * runtime lookups would resolve to nothing.
+ */
+@theme static {
+  /* Workspace semantics: sync-healthy, warning, and fresh-write accents. */
+  --color-success: #3ddc84;
+  --color-amber: #ffc27b;
+  --color-mint: #7bffd6;
+
+  --radius-tile: 10px;
+  --radius-panel: 12px;
+
+  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --shadow-lift: 0 16px 32px rgba(0, 0, 0, 0.45);
+
+  /*
+   * Every face in the app wears the same violet: identity is carried by the
+   * initials, not by a color, so a member never reads as a different person
+   * in two places. One ring color keeps the disc crisp on any surface.
+   */
+  --color-avatar-ring: rgba(170, 150, 255, 0.55);
+  --color-avatar-a: #8a63ff;
+  --color-avatar-b: #4e0eff;
+
+  /* One stable color per demo peer, so a peer's marks always agree. */
+  --color-peer-aaryaman: #ff7b7b;
+  --color-peer-justin: #4e0eff;
+  --color-peer-maya: #7bffd6;
+  --color-peer-kenji: #ffc27b;
 }
 
 @layer base {
@@ -128,6 +171,43 @@
     outline: 1px solid rgba(255, 255, 255, 0.32);
     outline-offset: 2px;
   }
+
+  /* The app is chrome, not a document: text selection is opt-in per element. */
+  [data-selectable],
+  [contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Overlay scrollbars: present when you need them, invisible in screenshots. */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  }
+
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-hidden {
+    scrollbar-width: none;
+  }
+
+  .scroll-hidden::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* Film grain drift — 8 discrete steps so the noise jitters instead of sliding. */
@@ -163,4 +243,89 @@
 
 .grain-anim {
   animation: grain-shift 0.66s steps(1) infinite;
+}
+
+/* A write landed here: one violet ring expands out of the row and dissolves. */
+@keyframes qfs-pulse-violet {
+  0% {
+    box-shadow: 0 0 0 0 rgba(78, 14, 255, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(78, 14, 255, 0);
+  }
+}
+
+.pulse-violet {
+  animation: qfs-pulse-violet 520ms cubic-bezier(0.16, 1, 0.3, 1) 1;
+}
+
+/* Rejection tell — a refused rename or a locked node nudges, never flashes red. */
+@keyframes qfs-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-3px);
+  }
+  40%,
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+.shake {
+  animation: qfs-shake 260ms ease-in-out 1;
+}
+
+/* The coral -> violet brand sweep, reused by tiles, chips and progress fills. */
+.brand-gradient {
+  background-image: linear-gradient(135deg, #ff7b7b 0%, #4e0eff 100%);
+}
+
+/*
+ * The same sweep, slowly breathing. Reserved for the one control that is always
+ * asking to be pressed (the chat send button): the stops are mirrored coral so
+ * the loop never snaps back, and the drift is slow enough to read as a sheen
+ * rather than an animation demanding attention.
+ */
+@keyframes qfs-gradient-drift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.brand-gradient-animated {
+  background-image: linear-gradient(120deg, #ff7b7b 0%, #4e0eff 50%, #ff7b7b 100%);
+  background-size: 220% 220%;
+  animation: qfs-gradient-drift 6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-gradient-animated {
+    animation: none;
+    background-position: 0% 50%;
+  }
+}
+
+/*
+ * Every avatar, one gradient. Written as a class rather than an inline style so
+ * the disc is a single paint the browser can reuse at every size.
+ */
+.avatar-face {
+  background-image: linear-gradient(135deg, var(--color-avatar-a), var(--color-avatar-b));
+}
+
+/* Floating surfaces sit ON the app, so they blur it rather than hide it. */
+.glass {
+  background: rgba(10, 15, 34, 0.72);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
 }

@@ -17,7 +17,7 @@ export const SEED_SERVERS: OrchestrationServer[] = [
         id: "vlt_1_1",
         serverId: "srv_1",
         name: "Design Assets",
-        memberCount: 3,
+        memberCount: 5,
         usedBytes: 1288490189,
         quotaBytes: 4294967296,
         role: "owner",

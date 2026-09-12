@@ -7,7 +7,7 @@ export interface ConfirmStateProps {
 
 /**
  * The other half of every dialog: what the form turns into once it succeeds.
- * Centred, three elements, no controls — the dialog closes itself.
+ * Centered, three elements, no controls — the dialog closes itself.
  */
 export function ConfirmState({ title, detail }: ConfirmStateProps) {
   return (

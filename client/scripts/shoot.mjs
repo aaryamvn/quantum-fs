@@ -7,8 +7,30 @@
 //
 // Usage:
 //   node scripts/shoot.mjs --url <URL> --out <PNG path>
-//        [--w 1280] [--h 800] [--dpr 1] [--wait 700]
+//        [--viewport 1280x800] [--w 1280] [--h 800] [--dpr 1] [--wait 700]
 //        [--hover <css>] [--focus <css>] [--click <css>] [--reduced]
+//        [--steps '<json array>'] [--settle 250] [--strict]
+//        [--clip "x,y,w,h"] [--full]
+//
+// --steps is an ordered interaction script, run AFTER --hover/--focus/--click,
+// so a single invocation can reach deep UI states (context menu -> submenu,
+// rename-in-place, drag a file onto a folder). Each entry is one of:
+//   {"action":"click","selector":"css","button":"left|right",
+//    "clickCount":1|2,"modifiers":["Shift","Meta"]}
+//   {"action":"dblclick","selector":"css"}
+//   {"action":"rightclick","selector":"css"}
+//   {"action":"hover","selector":"css"}
+//   {"action":"press","key":"Meta+K"}            (Playwright key syntax)
+//   {"action":"type","text":"hello"}
+//   {"action":"drag","from":"css","to":"css","steps":12}
+//   {"action":"dragTo","from":"css","x":123,"y":456,"steps":12}
+//   {"action":"wait","ms":300}
+//   {"action":"scroll","selector":"css","dy":400}
+//   {"action":"eval","js":"window.__qfs && window.__qfs.seek(12000)"}
+// Every step is followed by a settle pause (--settle, default 250ms). A step
+// that throws is recorded in "stepErrors" and the sequence continues, so one
+// missing selector never costs the whole capture — unless --strict, which
+// stops at the first failure (the screenshot is still taken).
 //
 // Prints ONE JSON line to stdout. Exit 0 on success (even with console
 // errors — the caller inspects the JSON); exit 1 only if navigation or the
@@ -35,9 +57,25 @@ const INTERACTION_TIMEOUT_MS = 5000;
 const HOVER_SETTLE_MS = 400;
 const FOCUS_SETTLE_MS = 200;
 const CLICK_SETTLE_MS = 400;
+const STEP_SETTLE_MS = 250;
+const DRAG_STEPS = 12;
+const TYPE_DELAY_MS = 12;
+
+const USAGE =
+  "usage: node scripts/shoot.mjs --url <URL> --out <PNG path> " +
+  "[--viewport 1280x800] [--w 1280] [--h 800] [--dpr 1] [--wait 700] " +
+  "[--hover <css>] [--focus <css>] [--click <css>] [--reduced] " +
+  "[--steps '<json array>'] [--settle 250] [--strict] " +
+  '[--clip "x,y,w,h"] [--full]\n' +
+  "\n" +
+  "--steps actions: click | dblclick | rightclick | hover | press | type | " +
+  "drag | dragTo | wait | scroll | eval\n" +
+  '  example: --steps \'[{"action":"rightclick","selector":"[data-node-id=\\"n1\\"]"},' +
+  '{"action":"click","selector":"[data-menu-item=\\"rename\\"]"},' +
+  '{"action":"type","text":"quarterly.pdf"}]\'\n';
 
 function parseArgs(argv) {
-  const flags = { reduced: false };
+  const flags = { reduced: false, full: false, strict: false, help: false };
   const takesValue = new Set([
     "url",
     "out",
@@ -48,7 +86,12 @@ function parseArgs(argv) {
     "hover",
     "focus",
     "click",
+    "viewport",
+    "steps",
+    "settle",
+    "clip",
   ]);
+  const booleans = new Set(["reduced", "full", "strict", "help"]);
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
@@ -60,8 +103,8 @@ function parseArgs(argv) {
       value = key.slice(eq + 1);
       key = key.slice(0, eq);
     }
-    if (key === "reduced") {
-      flags.reduced = value === null ? true : value !== "false";
+    if (booleans.has(key)) {
+      flags[key] = value === null ? true : value !== "false";
       continue;
     }
     if (!takesValue.has(key)) continue;
@@ -79,27 +122,145 @@ function num(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** "1280x800" -> [1280, 800]; anything unparseable keeps the defaults. */
+function parseViewport(value, fallbackW, fallbackH) {
+  if (typeof value !== "string") return [fallbackW, fallbackH];
+  const m = /^\s*(\d+)\s*[x×,]\s*(\d+)\s*$/i.exec(value);
+  if (!m) return [fallbackW, fallbackH];
+  return [Number(m[1]), Number(m[2])];
+}
+
+/** "x,y,w,h" -> a Playwright clip rect, or null when absent/unparseable. */
+function parseClip(value) {
+  if (typeof value !== "string") return null;
+  const parts = value.split(",").map((p) => Number(p.trim()));
+  if (parts.length !== 4 || parts.some((p) => !Number.isFinite(p))) return null;
+  return { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** No Playwright call should outlive one action budget, keyboard included. */
+function withTimeout(promise, ms, label) {
+  let timer = null;
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, guard]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 const args = parseArgs(process.argv.slice(2));
 
+if (args.help) {
+  process.stdout.write(USAGE);
+  process.exit(0);
+}
+
 if (!args.url || !args.out) {
-  process.stderr.write(
-    "shoot: --url and --out are required\n" +
-      "usage: node scripts/shoot.mjs --url <URL> --out <PNG path> " +
-      "[--w 1280] [--h 800] [--dpr 1] [--wait 700] " +
-      "[--hover <css>] [--focus <css>] [--click <css>] [--reduced]\n",
-  );
+  process.stderr.write(`shoot: --url and --out are required\n${USAGE}`);
   process.exit(1);
 }
 
 const url = args.url;
 const out = resolve(args.out);
-const w = num(args.w, 1280);
-const h = num(args.h, 800);
+const [vw, vh] = parseViewport(args.viewport, 1280, 800);
+const w = num(args.w, vw);
+const h = num(args.h, vh);
 const dpr = num(args.dpr, 1);
 const wait = num(args.wait, 700);
+const settle = num(args.settle, STEP_SETTLE_MS);
 const reduced = args.reduced === true;
+const full = args.full === true;
+const strict = args.strict === true;
+const clip = parseClip(args.clip);
+
+let steps = [];
+let stepsParseError = null;
+if (typeof args.steps === "string" && args.steps.trim() !== "") {
+  try {
+    const parsed = JSON.parse(args.steps);
+    if (!Array.isArray(parsed)) throw new Error("--steps must be a JSON array");
+    steps = parsed;
+  } catch (err) {
+    stepsParseError = err?.message ?? String(err);
+  }
+}
+
+/** Centre of an element in page coordinates — the anchor every drag uses. */
+async function centerOf(page, selector) {
+  const locator = page.locator(selector).first();
+  await locator.waitFor({ state: "visible", timeout: INTERACTION_TIMEOUT_MS });
+  const box = await locator.boundingBox();
+  if (!box) throw new Error(`no bounding box for ${selector}`);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/** Pointer down, N intermediate moves, pointer up — HTML5 DnD needs the moves. */
+async function dragPointer(page, from, to, moveSteps) {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  const n = Math.max(1, moveSteps);
+  for (let i = 1; i <= n; i += 1) {
+    await page.mouse.move(
+      from.x + ((to.x - from.x) * i) / n,
+      from.y + ((to.y - from.y) * i) / n,
+    );
+    await sleep(8);
+  }
+  await page.mouse.up();
+}
+
+async function runStep(page, step) {
+  const action = step?.action;
+  const opts = { timeout: INTERACTION_TIMEOUT_MS };
+  switch (action) {
+    case "click":
+      return page.click(step.selector, {
+        ...opts,
+        button: step.button ?? "left",
+        clickCount: step.clickCount ?? 1,
+        ...(step.modifiers ? { modifiers: step.modifiers } : {}),
+      });
+    case "dblclick":
+      return page.dblclick(step.selector, opts);
+    case "rightclick":
+      return page.click(step.selector, { ...opts, button: "right" });
+    case "hover":
+      return page.hover(step.selector, opts);
+    case "press":
+      return page.keyboard.press(step.key);
+    case "type":
+      return page.keyboard.type(String(step.text ?? ""), {
+        delay: TYPE_DELAY_MS,
+      });
+    case "drag": {
+      const from = await centerOf(page, step.from);
+      const to = await centerOf(page, step.to);
+      return dragPointer(page, from, to, num(step.steps, DRAG_STEPS));
+    }
+    case "dragTo": {
+      const from = await centerOf(page, step.from);
+      const to = { x: num(step.x, from.x), y: num(step.y, from.y) };
+      return dragPointer(page, from, to, num(step.steps, DRAG_STEPS));
+    }
+    case "wait":
+      return sleep(num(step.ms, 0));
+    case "scroll": {
+      const at = await centerOf(page, step.selector);
+      await page.mouse.move(at.x, at.y);
+      return page.mouse.wheel(num(step.dx, 0), num(step.dy, 0));
+    }
+    case "eval":
+      return page.evaluate(String(step.js ?? ""));
+    default:
+      throw new Error(`unknown action ${JSON.stringify(action)}`);
+  }
+}
 
 async function launch() {
   try {
@@ -191,8 +352,36 @@ try {
     }
   }
 
+  const stepErrors = [];
+  if (stepsParseError) {
+    stepErrors.push({ index: -1, action: "parse", error: stepsParseError });
+  }
+  for (let i = 0; i < steps.length; i += 1) {
+    const step = steps[i];
+    try {
+      await withTimeout(
+        Promise.resolve(runStep(page, step)),
+        INTERACTION_TIMEOUT_MS + 1000,
+        `step ${i} (${step?.action})`,
+      );
+    } catch (err) {
+      stepErrors.push({
+        index: i,
+        action: step?.action ?? null,
+        error: err?.message ?? String(err),
+      });
+      if (strict) break;
+    }
+    await sleep(settle);
+  }
+
   await mkdir(dirname(out), { recursive: true });
-  await page.screenshot({ path: out, type: "png", fullPage: false });
+  // Playwright rejects clip + fullPage together; an explicit region wins.
+  await page.screenshot({
+    path: out,
+    type: "png",
+    ...(clip ? { clip } : { fullPage: full }),
+  });
 
   let webgl2 = false;
   try {
@@ -221,8 +410,11 @@ try {
     consoleErrors,
     consoleWarnings,
     pageErrors,
+    stepErrors,
     ...interactionErrors,
   };
+  if (clip) summary.clip = clip;
+  if (full && !clip) summary.fullPage = true;
   if (launched.launchNote) summary.launchNote = launched.launchNote;
 
   process.stdout.write(`${JSON.stringify(summary)}\n`);

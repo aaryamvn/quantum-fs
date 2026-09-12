@@ -98,7 +98,7 @@ impl BridgeState {
                         id: "vlt_1_1".into(),
                         server_id: "srv_1".into(),
                         name: "Design Assets".into(),
-                        member_count: 3,
+                        member_count: 5,
                         used_bytes: 1_288_490_189,
                         quota_bytes: 4_294_967_296,
                         role: Role::Owner,

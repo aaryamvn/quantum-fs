@@ -16,7 +16,7 @@ export interface GrainOverlayProps {
 
 /**
  * Film grain. Blended with `overlay`, so it is invisible over pure black and
- * only reads across the coloured field — that is intended.
+ * only reads across the colored field — that is intended.
  */
 export function GrainOverlay({ opacity = 0.09, frozen = false }: GrainOverlayProps) {
   const animated = !frozen && !devQuery.reduced;

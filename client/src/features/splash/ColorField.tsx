@@ -17,8 +17,13 @@ export interface ColorFieldProps {
   /** Seconds since the settle finished; 0 until then. Drives the ambient drift. */
   idle: MotionValue<number>;
   shader: FieldShader;
-  /** Final panel width as a fraction of the viewport width. */
-  panel?: number;
+  /**
+   * Final panel width as a fraction of the viewport width.
+   *
+   * A motion value is read per frame inside the render loop, so the vault dive
+   * can bloom and drain the whole field without re-rendering this component.
+   */
+  panel?: number | MotionValue<number>;
   /** Backing-store scale: the canvas is rendered tiny and blurred up. */
   scale?: number;
   /** CSS blur radius in px. */
@@ -224,7 +229,7 @@ export function ColorField({
       gl.uniform1f(uProgress, live.progress.get());
       gl.uniform1f(uSettle, live.settle.get());
       gl.uniform1f(uIdle, live.idle.get());
-      gl.uniform1f(uPanel, live.panel);
+      gl.uniform1f(uPanel, typeof live.panel === "number" ? live.panel : live.panel.get());
 
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 

@@ -1,8 +1,9 @@
 /**
  * Domain types for the daemon bridge.
  *
- * These mirror `client/src-tauri/src/bridge.rs` exactly; the Rust side serializes
- * with `#[serde(rename_all = "camelCase")]` so the wire shape matches these names.
+ * These mirror `client/src-tauri/src/bridge.rs` and `client/src-tauri/src/fs_types.rs`
+ * exactly; the Rust side serializes with `#[serde(rename_all = "camelCase")]` so the
+ * wire shape matches these names.
  * Terminology follows docs/decisions/net-vault-join-directory.md.
  */
 
@@ -55,7 +56,219 @@ export interface DaemonStatus {
   dataDir: string | null;
 }
 
+/** Identifier of one node (folder or file) inside a vault's replicated tree. */
+export type NodeId = string;
+
+/** What a node is: a folder that holds children, or a leaf file. */
+export type NodeKind = "folder" | "file";
+
+/** The folder tints a member can choose; the first entry is the default look. */
+export const FOLDER_COLORS = [
+  "graphite",
+  "coral",
+  "violet",
+  "blue",
+  "teal",
+  "green",
+  "amber",
+  "pink",
+  "red",
+] as const;
+
+/** One of {@link FOLDER_COLORS}. */
+export type FolderColor = (typeof FOLDER_COLORS)[number];
+
+/** Files may live only on other peers; folders are always "local" because the tree is replicated to every member. */
+export type Availability = "local" | "remote" | "downloading";
+
+/** Vault-wide standing: admins manage membership, the join code and vault settings. */
+export type MemberRole = "admin" | "member";
+
+/** Per-node permission a member holds on a subtree: read-only, or allowed to mutate. */
+export type AccessLevel = "viewer" | "editor";
+
+/** One entry of a vault's replicated file tree. Folders and files share this shape. */
+export interface FsNode {
+  id: NodeId;
+  vaultId: VaultId;
+  /** null only for the vault root folder (id "root_<vaultId>", name = vault name). */
+  parentId: NodeId | null;
+  kind: NodeKind;
+  name: string;
+  /** Files: byte size. Folders: recursive total of their files. */
+  sizeBytes: number;
+  createdAt: number; // epoch ms
+  modifiedAt: number; // epoch ms
+  createdBy: PeerId;
+  modifiedBy: PeerId;
+  /** Folders only; null = default graphite. Always null for files. */
+  color: FolderColor | null;
+  availability: Availability;
+  /** 0..1 while availability === "downloading", else null. */
+  progress: number | null;
+  /** Peers holding a full copy (files). Folders: []. */
+  holders: PeerId[];
+  /** Folders: number of direct children. Files: 0. */
+  childCount: number;
+}
+
+/** A person on a vault's member list, as the workspace needs to draw them. */
+export interface Member {
+  peerId: PeerId;
+  name: string;
+  initials: string;
+  /** Presence/cursor color as #RRGGBB. */
+  color: string;
+  role: MemberRole;
+  online: boolean;
+  lastSeenAt: number;
+  lastEdited: { nodeId: NodeId; at: number } | null;
+  /** Ops waiting to sync while offline. */
+  queuedOps: number;
+  isSelf: boolean;
+}
+
+/** One member's permission inside a node's access list. */
+export interface AccessEntry {
+  peerId: PeerId;
+  level: AccessLevel;
+}
+
+/** The effective permission list for one node, and whether it is its own or inherited. */
+export interface NodeAccess {
+  nodeId: NodeId;
+  /** true = no explicit entries here; `entries` is the effective list inherited from the nearest ancestor that has explicit entries (or empty = vault default: every member is an editor). */
+  inherit: boolean;
+  entries: AccessEntry[];
+}
+
+/** What happened to a node, for the History surface. */
+export type HistoryKind =
+  | "created"
+  | "renamed"
+  | "moved"
+  | "modified"
+  | "duplicated"
+  | "colored"
+  | "access"
+  | "deleted"
+  | "downloaded";
+
+/** One append-only entry in a node's history. */
+export interface HistoryEvent {
+  id: string;
+  vaultId: VaultId;
+  nodeId: NodeId;
+  kind: HistoryKind;
+  at: number;
+  by: PeerId;
+  /** e.g. old name / old parent name; null when not applicable. */
+  from: string | null;
+  to: string | null;
+  /** Human sentence without the actor, e.g. "renamed to poster-v2.hdr". */
+  summary: string;
+}
+
+/** A recently touched node, denormalized with its vault name for the sidebar list. */
+export interface Recent {
+  node: FsNode;
+  vaultName: string;
+  at: number;
+}
+
+/** Everything the vault settings modal reads and writes about one vault. */
+export interface VaultMeta {
+  id: VaultId;
+  serverId: ServerId;
+  name: string;
+  description: string;
+  joinCode: JoinCode;
+  createdAt: number;
+  createdBy: PeerId;
+  /** Keys rotate weekly (docs/VISION.md). */
+  keyRotatedAt: number;
+  autoCleanup: boolean;
+  /** Percent of local disk use at which auto-cleanup runs. */
+  cleanupThresholdPct: number;
+}
+
+/** Where another member's pointer is, expressed so it survives different window sizes. */
+export interface PeerCursor {
+  /** anchor === null: x,y are fractions (0..1) of the canvas viewport. anchor !== null: x,y are px offsets from the center of that node's tile. */
+  x: number;
+  y: number;
+  anchor: NodeId | null;
+  /** How long the peer's move to this target should take (ms); 0 = arrive at the follower's default pace. */
+  glideMs: number;
+}
+
+/** Live state of one peer in a vault: where they are and what they are touching. */
+export interface PeerPresence {
+  peerId: PeerId;
+  online: boolean;
+  idle: boolean;
+  folderId: NodeId | null;
+  cursor: PeerCursor | null;
+  hoveringNodeId: NodeId | null;
+  draggingNodeIds: NodeId[];
+  updatedAt: number;
+}
+
+/** One delta of a `fs-changed` event: a node to insert/replace, or a node to drop. */
+export type FsChange = { kind: "upsert"; node: FsNode } | { kind: "remove"; nodeId: NodeId };
+
+/** A change performed by another member that the UI should animate before the tree mutates. */
+export interface RemoteOp {
+  id: string;
+  actor: PeerId;
+  vaultId: VaultId;
+  kind: "move" | "pulse";
+  nodeIds: NodeId[];
+  /** move: destination folder. pulse: null. */
+  toFolderId: NodeId | null;
+  /** move: how long the flight takes before the matching fs-changed arrives. pulse: 0. */
+  flightMs: number;
+}
+
+/** A fully specified search request; every filter is nullable so "no filter" is explicit. */
+export interface SearchQuery {
+  text: string;
+  /** null = every vault the user belongs to. */
+  vaultId: VaultId | null;
+  kinds: NodeKind[] | null;
+  exts: string[] | null;
+  inFolderId: NodeId | null;
+  by: PeerId | null;
+  availability: Availability | null;
+  modifiedAfter: number | null;
+  limit: number;
+}
+
+/** One search result: the node, where it lives, and what matched in its name. */
+export interface SearchHit {
+  node: FsNode;
+  vaultName: string;
+  /** Names from the vault root (exclusive) to the parent (inclusive). */
+  path: string[];
+  score: number;
+  /** [start, end) ranges into node.name that matched. */
+  matches: [number, number][];
+}
+
+/** Answer from the agent bar at the bottom of the canvas. */
+export interface AgentReply {
+  id: string;
+  text: string;
+}
+
 /** Push notifications from the Rust side (or the mock) to the webview. */
 export type BackendEvent =
   | { type: "servers-changed" }
-  | { type: "daemon-status"; status: DaemonStatus };
+  | { type: "daemon-status"; status: DaemonStatus }
+  | { type: "fs-changed"; vaultId: VaultId; changes: FsChange[]; actor: PeerId }
+  | { type: "remote-op"; op: RemoteOp }
+  | { type: "presence"; vaultId: VaultId; peers: PeerPresence[] }
+  | { type: "members-changed"; vaultId: VaultId }
+  | { type: "vault-changed"; vaultId: VaultId }
+  | { type: "recents-changed" }
+  | { type: "demo-reset"; vaultId: VaultId };

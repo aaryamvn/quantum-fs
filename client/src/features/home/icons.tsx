@@ -11,7 +11,7 @@ export const ICON_COL = 20;
  * `--cut` is an unregistered custom property, so it snaps the instant a row is
  * hovered. Transitioning the badge's own background-color and box-shadow —
  * real animatable properties, whose computed values re-resolve when the var
- * changes — keeps the cut-out in step with the row's 160ms colour fade.
+ * changes — keeps the cut-out in step with the row's 160ms color fade.
  */
 const CUT_MS = 160;
 const CUT_EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
@@ -34,11 +34,11 @@ export function VaultGlyph({ size = ICON_SIZE }: { size?: number }) {
 /**
  * Base glyph with a plus badge at its bottom-right. The badge sits on a disc
  * painted with whatever surface is behind it (`--cut`, set by the row or the
- * button) and carries a ring of the same colour, so it punches a clean hole out
+ * button) and carries a ring of the same color, so it punches a clean hole out
  * of the base glyph instead of colliding with its strokes.
  */
 function WithPlusBadge({ Base, size }: { Base: LucideLike; size: number }) {
-  // The knockout is a circle of radius disc/2 + ring centred on the badge. Any
+  // The knockout is a circle of radius disc/2 + ring centerd on the badge. Any
   // larger and it reaches the middle of the base glyph — on a shield that means
   // eating the point, which is the whole silhouette — so it is kept small and
   // pushed a quarter of the box outside, where it only bites the corner.
