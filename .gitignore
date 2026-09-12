@@ -1,0 +1,25 @@
+# OS / editors
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# secrets
+.env
+.env.*
+*.pem
+*.key
+
+# agent-local state (never shared)
+.claude/settings.local.json
+
+# build / deps (generic; extend per stack)
+node_modules/
+dist/
+build/
+out/
+target/
+.venv/
+__pycache__/
+*.pyc
+*.log
