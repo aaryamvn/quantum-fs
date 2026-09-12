@@ -42,7 +42,7 @@ pub async fn establish(
     expected: Option<&DirectoryAd>,
     progress: &mut HandshakeProgress,
 ) -> Result<EstablishedSession> {
-    establish_guarded(stream, keys, expected, progress, |_| false).await
+    establish_guarded(stream, keys, expected, progress, |_| Ok(false)).await
 }
 
 pub async fn establish_guarded<F>(
@@ -50,10 +50,10 @@ pub async fn establish_guarded<F>(
     keys: &KeyStore,
     expected: Option<&DirectoryAd>,
     progress: &mut HandshakeProgress,
-    preserve_existing: F,
+    mut preserve_existing: F,
 ) -> Result<EstablishedSession>
 where
-    F: Fn(PeerId) -> bool,
+    F: FnMut(PeerId) -> Result<bool>,
 {
     let local = keys.identity()?;
     write_frame(
@@ -72,7 +72,7 @@ where
     progress.peer_id = Some(peer.peer_id);
     progress.had_pair =
         keys.current_session(peer.peer_id).is_ok() || keys.cached_pair(peer.peer_id)?.is_some();
-    let preserve_existing = preserve_existing(peer.peer_id);
+    let preserve_existing = preserve_existing(peer.peer_id)?;
     if preserve_existing {
         if keys.load_verified_peer(&peer.peer_id)? != peer || !progress.had_pair {
             return Err(Error::AuthenticationFailed);
@@ -100,7 +100,6 @@ where
     if preserve_existing {
         return finish_preserved(stream, keys, &peer, local_epoch, remote_epoch, progress).await;
     }
-
     let wrap = RustCryptoConstructionBWrap::new(keys.clone());
     if let Some(message) = initial_wrap(keys, &wrap, &local, &peer, local_epoch, remote_epoch)? {
         send_wrap(stream, &message).await?;
@@ -118,9 +117,7 @@ async fn finish_preserved(
 ) -> Result<EstablishedSession> {
     let session = keys.current_session(peer.peer_id)?;
     if local_epoch != session.epoch || remote_epoch != session.epoch {
-        return Err(Error::State(
-            "active pair cannot rotate during another Join",
-        ));
+        return finish_candidate(stream, keys, peer, local_epoch, remote_epoch, progress).await;
     }
     let (initiator, cached) = keys
         .cached_pair(peer.peer_id)?
@@ -169,6 +166,92 @@ async fn finish_preserved(
     })
 }
 
+async fn finish_candidate(
+    stream: &mut TcpStream,
+    keys: &KeyStore,
+    peer: &IdentityDocument,
+    local_epoch: Epoch,
+    remote_epoch: Epoch,
+    progress: &mut HandshakeProgress,
+) -> Result<EstablishedSession> {
+    let wrap = RustCryptoConstructionBWrap::new(keys.clone());
+    let confirmed_epoch = keys.current_session(peer.peer_id)?.epoch;
+    if let Some((initiator, cached)) = keys.cached_candidate(peer.peer_id)? {
+        if initiator == keys.peer_id()? {
+            send_wrap(stream, &wrap.retry(&cached)?).await?;
+        }
+    } else if keys.peer_id()? < peer.peer_id
+        || (local_epoch > confirmed_epoch && local_epoch >= remote_epoch)
+    {
+        // The hint only chooses who speaks first. It never advances the
+        // watermark or replaces the confirmed pair.
+        let epoch = keys.next_epoch(&peer.peer_id)?;
+        let (_, message) = wrap.create_candidate(peer.peer_id, &peer.ek, epoch)?;
+        send_wrap(stream, &message).await?;
+    }
+
+    loop {
+        let frame = read_frame(stream).await?;
+        match frame.kind {
+            WRAP_KIND => {
+                let incoming = encoding::decode_wrap(&frame.payload)?;
+                if keys
+                    .candidate_session(peer.peer_id)
+                    .is_ok_and(|candidate| incoming.epoch < candidate.epoch)
+                {
+                    RustCryptoPureMlDsa.verify(
+                        &peer.vk,
+                        WRAP_CONTEXT,
+                        &encoding::wrap_m(&incoming)?,
+                        &incoming.signature,
+                    )?;
+                    continue;
+                }
+                match wrap.unwrap_candidate(peer.peer_id, &incoming) {
+                    Ok(candidate) if keys.candidate_retry_epoch(&peer.peer_id)?.is_some() => {
+                        send_ack(stream, candidate.epoch, true).await?;
+                        let (_, retry) = wrap.retry_candidate_collision(peer.peer_id)?;
+                        send_wrap(stream, &retry).await?;
+                    }
+                    Ok(candidate) => {
+                        send_ack(stream, candidate.epoch, false).await?;
+                        progress.wrap_acknowledged = true;
+                        log_established(peer, candidate.epoch);
+                        return Ok(EstablishedSession {
+                            peer: peer.clone(),
+                            session: candidate,
+                        });
+                    }
+                    Err(Error::EpochConflict { .. }) => {
+                        // The local candidate won; wait for its acknowledgment.
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            WRAP_ACK_KIND => {
+                let (epoch, retry_pending) = encoding::decode_wrap_ack(&frame.payload)?;
+                if retry_pending {
+                    keys.discard_candidate(peer.peer_id)?;
+                    continue;
+                }
+                let candidate = keys.candidate_session(peer.peer_id)?;
+                if candidate.epoch != epoch {
+                    return Err(Error::State(
+                        "WrapAck epoch does not match admission candidate",
+                    ));
+                }
+                progress.wrap_acknowledged = true;
+                log_established(peer, candidate.epoch);
+                return Ok(EstablishedSession {
+                    peer: peer.clone(),
+                    session: candidate,
+                });
+            }
+            _ => return Err(Error::State("unexpected frame during candidate handshake")),
+        }
+    }
+}
+
 fn initial_wrap(
     keys: &KeyStore,
     wrap: &RustCryptoConstructionBWrap,
@@ -183,7 +266,7 @@ fn initial_wrap(
     let cached_is_eligible = cached.as_ref().is_some_and(|(initiator, message)| {
         *initiator == local.peer_id && message.epoch == floor && has_active
     });
-    if cached_is_eligible && (local_epoch == remote_epoch || local.peer_id < peer.peer_id) {
+    if cached_is_eligible && (local_epoch >= remote_epoch || local.peer_id < peer.peer_id) {
         let message = cached
             .ok_or(Error::State("eligible cached wrap disappeared"))?
             .1;
@@ -217,6 +300,18 @@ async fn finish_wrap(
         match frame.kind {
             WRAP_KIND => {
                 let message = encoding::decode_wrap(&frame.payload)?;
+                if keys
+                    .current_session(peer.peer_id)
+                    .is_ok_and(|session| message.epoch < session.epoch)
+                {
+                    RustCryptoPureMlDsa.verify(
+                        &peer.vk,
+                        WRAP_CONTEXT,
+                        &encoding::wrap_m(&message)?,
+                        &message.signature,
+                    )?;
+                    continue;
+                }
                 prepare_incoming_floor(keys, peer, &message)?;
                 match wrap.unwrap(peer.peer_id, &message) {
                     Ok(session) => {
@@ -332,6 +427,15 @@ fn require_kind(frame: &Frame, expected: u8) -> Result<()> {
 
 pub fn seal_packet(keys: &KeyStore, peer_id: PeerId, plaintext: &[u8]) -> Result<ControlPacket> {
     let session = keys.current_session(peer_id)?;
+    seal_packet_with_session(keys, &session, plaintext)
+}
+
+pub(crate) fn seal_packet_with_session(
+    keys: &KeyStore,
+    session: &PairSession,
+    plaintext: &[u8],
+) -> Result<ControlPacket> {
+    let peer_id = session.peer_id;
     let header = PacketHeader {
         version: PROTOCOL_VERSION,
         sender_id: keys.peer_id()?,
@@ -352,6 +456,14 @@ pub fn seal_packet(keys: &KeyStore, peer_id: PeerId, plaintext: &[u8]) -> Result
 
 pub fn open_packet(keys: &KeyStore, peer_id: PeerId, packet: &ControlPacket) -> Result<Vec<u8>> {
     let session = keys.current_session(peer_id)?;
+    open_packet_with_session(keys, &session, packet)
+}
+
+pub(crate) fn open_packet_with_session(
+    keys: &KeyStore,
+    session: &PairSession,
+    packet: &ControlPacket,
+) -> Result<Vec<u8>> {
     let aad = encoding::packet_aad(&packet.header);
     let nonce = encoding::nonce(&packet.header, PayloadType::Packet);
     RustCryptoAes256Gcm::new(keys.clone()).open(

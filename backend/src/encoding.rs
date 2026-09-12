@@ -461,8 +461,12 @@ pub fn encode_flush_offer(offer: &FlushOffer) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     out.extend_from_slice(&offer.challenge.0);
     out.extend_from_slice(&offer.frame_count.to_be_bytes());
-    if !offer.historical.is_empty() {
-        let mut extension = vec![1];
+    if !offer.historical.is_empty() || offer.bootstrap_through.is_some() {
+        let mut extension = vec![if offer.bootstrap_through.is_some() {
+            2
+        } else {
+            1
+        }];
         push_length(&mut extension, offer.historical.len())?;
         let mut previous = None;
         for document in &offer.historical {
@@ -471,6 +475,9 @@ pub fn encode_flush_offer(offer: &FlushOffer) -> Result<Vec<u8>> {
             }
             push_variable(&mut extension, &encode_identity(document)?)?;
             previous = Some(document.peer_id);
+        }
+        if let Some(through) = offer.bootstrap_through {
+            extension.extend_from_slice(&through.to_be_bytes());
         }
         push_variable(&mut out, &extension)?;
     }
@@ -482,9 +489,11 @@ pub fn decode_flush_offer(bytes: &[u8]) -> Result<FlushOffer> {
     let challenge = FlushChallenge(reader.array()?);
     let frame_count = reader.u32()?;
     let mut historical = Vec::new();
+    let mut bootstrap_through = None;
     if reader.remaining() != 0 {
         let mut extension = Reader::new(reader.variable()?);
-        if extension.byte()? != 1 {
+        let version = extension.byte()?;
+        if !matches!(version, 1 | 2) {
             return Err(Error::InvalidInput(
                 "unsupported flush offer extension version",
             ));
@@ -499,6 +508,9 @@ pub fn decode_flush_offer(bytes: &[u8]) -> Result<FlushOffer> {
             previous = Some(document.peer_id);
             historical.push(document);
         }
+        if version == 2 {
+            bootstrap_through = Some(extension.u64()?);
+        }
         extension.finish()?;
     }
     reader.finish()?;
@@ -509,6 +521,7 @@ pub fn decode_flush_offer(bytes: &[u8]) -> Result<FlushOffer> {
         challenge,
         frame_count,
         historical,
+        bootstrap_through,
     })
 }
 
@@ -852,6 +865,24 @@ pub fn flush_transport_digest(
     Ok(Sha256::digest(committed).into())
 }
 
+/// The encrypted end marker binds the offered snapshot coverage as well as
+/// every envelope and writer document. Legacy drains retain their digest.
+pub fn flush_transport_digest_with_bootstrap(
+    envelopes: &[MailboxEnvelope],
+    historical: &[IdentityDocument],
+    bootstrap_through: Option<u64>,
+) -> Result<[u8; 32]> {
+    let digest = flush_transport_digest(envelopes, historical)?;
+    let Some(through) = bootstrap_through else {
+        return Ok(digest);
+    };
+    let mut hash = Sha256::new();
+    hash.update(b"qfs/v1/bootstrap/");
+    hash.update(digest);
+    hash.update(through.to_be_bytes());
+    Ok(hash.finalize().into())
+}
+
 pub fn encode_pull_request(request: &PullRequest) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     push_length(&mut out, request.chunk_ids().len())?;
@@ -1181,7 +1212,7 @@ pub fn encode_replica(metadata: &ReplicaMetadata, generation: u64) -> Result<Vec
     }
 
     let mut extension = Vec::new();
-    extension.push(1);
+    extension.push(2);
     push_length(&mut extension, metadata.denied.len())?;
     for peer_id in &metadata.denied {
         extension.extend_from_slice(&peer_id.0);
@@ -1206,6 +1237,14 @@ pub fn encode_replica(metadata: &ReplicaMetadata, generation: u64) -> Result<Vec
         }
         extension.extend_from_slice(&peer_id.0);
         push_variable(&mut extension, &encode_identity(document)?)?;
+    }
+    push_length(&mut extension, metadata.bootstrap_through.len())?;
+    for (peer, through) in &metadata.bootstrap_through {
+        if !metadata.members.contains(peer) || *through >= metadata.next_control {
+            return Err(Error::InvalidInput("invalid replica bootstrap coverage"));
+        }
+        extension.extend_from_slice(&peer.0);
+        extension.extend_from_slice(&through.to_be_bytes());
     }
     push_variable(&mut body, &extension)?;
 
@@ -1392,10 +1431,12 @@ pub fn decode_replica(bytes: &[u8], expected_root: FileId) -> Result<(u64, Repli
     let mut admission = None;
     let mut historical_members = members.clone();
     let mut identity_documents = std::collections::BTreeMap::new();
+    let mut bootstrap_through = std::collections::BTreeMap::new();
     if reader.remaining() != 0 {
         let extension = reader.variable()?;
         let mut extension = Reader::new(extension);
-        if extension.byte()? != 1 {
+        let extension_version = extension.byte()?;
+        if !matches!(extension_version, 1 | 2) {
             return Err(Error::InvalidInput("unsupported replica extension version"));
         }
         let denied_count = extension.count(32)?;
@@ -1440,6 +1481,22 @@ pub fn decode_replica(bytes: &[u8], expected_root: FileId) -> Result<(u64, Repli
             identity_documents.insert(peer_id, document);
             previous_peer = Some(peer_id);
         }
+        if extension_version >= 2 {
+            let count = extension.count(40)?;
+            previous_peer = None;
+            for _ in 0..count {
+                let peer = PeerId(extension.array()?);
+                let through = extension.u64()?;
+                if previous_peer.is_some_and(|previous| previous >= peer)
+                    || !members.contains(&peer)
+                    || through >= next_control
+                {
+                    return Err(Error::InvalidInput("invalid replica bootstrap coverage"));
+                }
+                bootstrap_through.insert(peer, through);
+                previous_peer = Some(peer);
+            }
+        }
         extension.finish()?;
     }
     reader.finish()?;
@@ -1460,6 +1517,7 @@ pub fn decode_replica(bytes: &[u8], expected_root: FileId) -> Result<(u64, Repli
             admission,
             historical_members,
             identity_documents,
+            bootstrap_through,
         },
     ))
 }
@@ -1608,6 +1666,26 @@ pub(crate) fn encode_store_state(state: &PersistedState) -> Result<Zeroizing<Vec
         out.extend_from_slice(&peer_id.0);
         out.extend_from_slice(&epoch.0.to_be_bytes());
     }
+    if !state.candidates.is_empty() {
+        if state.candidates.len() > crate::keystore::MAX_ADMISSION_CANDIDATES {
+            return Err(Error::InvalidInput("candidate pair cap exceeded"));
+        }
+        let mut extension = Zeroizing::new(vec![1]);
+        push_length(&mut extension, state.candidates.len())?;
+        let mut previous = None;
+        for pair in &state.candidates {
+            if previous.is_some_and(|peer| peer >= pair.peer_id) {
+                return Err(Error::InvalidInput("candidate pairs are not canonical"));
+            }
+            previous = Some(pair.peer_id);
+            extension.extend_from_slice(&pair.peer_id.0);
+            extension.extend_from_slice(&pair.epoch.0.to_be_bytes());
+            extension.extend_from_slice(&pair.initiator.0);
+            push_variable(&mut extension, &wrap_m(&pair.wrap)?)?;
+            push_variable(&mut extension, &pair.wrap.signature)?;
+        }
+        push_variable(&mut out, &extension)?;
+    }
     Ok(out)
 }
 
@@ -1664,12 +1742,45 @@ pub(crate) fn decode_store_state(bytes: &[u8]) -> Result<PersistedState> {
             epoch_watermarks.push((PeerId(reader.array()?), Epoch(reader.u64()?)));
         }
     }
+    let mut candidates = Vec::new();
+    if reader.remaining() != 0 {
+        let mut extension = Reader::new(reader.variable()?);
+        if extension.byte()? != 1 {
+            return Err(Error::InvalidInput(
+                "unsupported candidate extension version",
+            ));
+        }
+        let count = extension.count(160)?;
+        if count > crate::keystore::MAX_ADMISSION_CANDIDATES {
+            return Err(Error::InvalidInput("candidate pair cap exceeded"));
+        }
+        let mut previous = None;
+        for _ in 0..count {
+            let peer_id = PeerId(extension.array()?);
+            if previous.is_some_and(|peer| peer >= peer_id) {
+                return Err(Error::InvalidInput("candidate pairs are not canonical"));
+            }
+            previous = Some(peer_id);
+            let epoch = Epoch(extension.u64()?);
+            let initiator = PeerId(extension.array()?);
+            let message = extension.variable()?;
+            let signature = extension.variable()?;
+            candidates.push(PersistedPair {
+                peer_id,
+                epoch,
+                initiator,
+                wrap: decode_wrap_message(message, signature)?,
+            });
+        }
+        extension.finish()?;
+    }
     reader.finish()?;
     Ok(PersistedState {
         local_id,
         next_slot,
         peers,
         pairs,
+        candidates,
         keys,
         epoch_watermarks,
     })
@@ -1862,6 +1973,7 @@ mod persistence_tests {
             pairs: Vec::new(),
             keys: Vec::new(),
             epoch_watermarks: Vec::new(),
+            candidates: Vec::new(),
         }
     }
 
@@ -1929,6 +2041,7 @@ mod persistence_tests {
                 key: Zeroizing::new([0xa5; 32]),
             }],
             epoch_watermarks: vec![(peer_id, Epoch(4))],
+            candidates: Vec::new(),
         };
 
         let encoded = must_ok(encode_store_state(&state));
@@ -2048,7 +2161,7 @@ mod persistence_tests {
                 .try_into()
                 .unwrap_or_else(|_| panic!("body length slice must be four bytes")),
         ) as usize;
-        let extension_len = 4 + 1 + 4 + 1 + 4 + 4;
+        let extension_len = 4 + 1 + 4 + 1 + 4 + 4 + 4;
         let legacy_body_len = body_len - extension_len;
         let mut legacy = encoded[..header_len + legacy_body_len].to_vec();
         legacy[body_len_offset..body_len_offset + 4]
@@ -2061,6 +2174,20 @@ mod persistence_tests {
         assert!(decoded.denied.is_empty());
         assert!(decoded.admission.is_none());
         assert!(decoded.identity_documents.is_empty());
+        assert!(decoded.bootstrap_through.is_empty());
+
+        // Version 1 carried history but no bootstrap map. It remains readable.
+        let mut version_one = encoded[..encoded.len() - 32 - 4].to_vec();
+        version_one[body_len_offset..body_len_offset + 4]
+            .copy_from_slice(&((body_len - 4) as u32).to_be_bytes());
+        let extension_offset = header_len + legacy_body_len;
+        version_one[extension_offset..extension_offset + 4]
+            .copy_from_slice(&((extension_len - 8) as u32).to_be_bytes());
+        version_one[extension_offset + 4] = 1;
+        let digest = Sha256::digest(&version_one);
+        version_one.extend_from_slice(&digest);
+        let (_, decoded) = must_ok(decode_replica(&version_one, root));
+        assert!(decoded.bootstrap_through.is_empty());
     }
 
     #[test]
@@ -2148,11 +2275,11 @@ mod persistence_tests {
                 .try_into()
                 .unwrap_or_else(|_| panic!("body length slice must be four bytes")),
         ) as usize;
-        let extension_content_len = 1 + 4 + 1 + 4 + 4;
+        let extension_content_len = 1 + 4 + 1 + 4 + 4 + 4;
         let extension_version_offset = header_len + body_len - extension_content_len;
 
         let mut bad_version = encoded.clone();
-        bad_version[extension_version_offset] = 2;
+        bad_version[extension_version_offset] = 3;
         replace_replica_digest(&mut bad_version);
         assert!(decode_replica(&bad_version, root).is_err());
 

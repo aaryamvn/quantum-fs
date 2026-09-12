@@ -244,6 +244,7 @@ fn welcome_flush_and_encrypted_controls_are_canonical() -> Result<()> {
         challenge: FlushChallenge([4; 32]),
         frame_count: 5,
         historical: Vec::new(),
+        bootstrap_through: None,
     };
     assert_eq!(
         encoding::encode_flush_offer(&offer)?,
@@ -262,6 +263,22 @@ fn welcome_flush_and_encrypted_controls_are_canonical() -> Result<()> {
             == historical_offer
     );
     assert!(encoding::decode_flush_offer(&[0; 35]).is_err());
+    let bootstrap_offer = FlushOffer {
+        bootstrap_through: Some(42),
+        ..historical_offer
+    };
+    assert!(
+        encoding::decode_flush_offer(&encoding::encode_flush_offer(&bootstrap_offer)?)?
+            == bootstrap_offer
+    );
+    assert_ne!(
+        encoding::flush_transport_digest_with_bootstrap(&[], &[], Some(42))?,
+        encoding::flush_transport_digest_with_bootstrap(&[], &[], Some(43))?
+    );
+    assert_ne!(
+        encoding::flush_transport_digest_with_bootstrap(&[], &[], Some(0))?,
+        encoding::flush_transport_digest_with_bootstrap(&[], &[], None)?
+    );
 
     let controls = [
         NetControl::JoinAccepted {

@@ -16,6 +16,7 @@ use crate::{
         aead::{Aes256Gcm, RustCryptoAes256Gcm},
         identity::IdentityDocument,
         sign::{PureMlDsa, RustCryptoPureMlDsa, FLUSH_CONTEXT},
+        wrap::PairSession,
     },
     demo_log::{self, Kind},
     encoding::{self, MailboxFrame},
@@ -36,6 +37,10 @@ use crate::{
     sync::pull::{encrypt_at_send, open_chunk},
     Error, Result,
 };
+
+pub(crate) const MAX_BOOTSTRAP_FRAMES: usize = 100_000;
+pub(crate) const MAX_BOOTSTRAP_BYTES: usize = 64 * 1024 * 1024;
+const BOOTSTRAP_FRAME_OVERHEAD: usize = 256;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Presence {
@@ -123,6 +128,7 @@ pub struct HostState {
     denied: BTreeSet<PeerId>,
     historical_members: BTreeSet<PeerId>,
     identity_documents: BTreeMap<PeerId, IdentityDocument>,
+    bootstrap_through: BTreeMap<PeerId, u64>,
     chunks: SharedChunkStore,
     manifests: BTreeMap<FileId, TrustedManifest>,
     log: Vec<ControlRecord>,
@@ -156,11 +162,16 @@ pub struct PreparedHostFlush {
     peer_id: PeerId,
     challenge: FlushChallenge,
     envelopes: Vec<MailboxEnvelope>,
+    bootstrap_through: Option<u64>,
 }
 
 impl PreparedHostFlush {
     pub fn envelopes(&self) -> &[MailboxEnvelope] {
         &self.envelopes
+    }
+
+    pub fn bootstrap_through(&self) -> Option<u64> {
+        self.bootstrap_through
     }
 }
 
@@ -190,6 +201,7 @@ pub struct MemberReplica {
     expected_root: FileId,
     tree: DirectoryTree,
     last_applied: u64,
+    bootstrap_through: u64,
 }
 
 #[derive(Clone)]
@@ -212,6 +224,7 @@ struct StagedReplica {
     manifests: BTreeMap<FileId, TrustedManifest>,
     controls: BTreeMap<u64, ControlRecord>,
     log: Vec<ControlRecord>,
+    bootstrap_through: u64,
 }
 
 impl HostService {
@@ -240,6 +253,7 @@ impl HostService {
                 host_id,
                 historical_members: members.clone(),
                 identity_documents: BTreeMap::new(),
+                bootstrap_through: BTreeMap::new(),
                 denied: BTreeSet::new(),
                 members,
                 chunks,
@@ -318,6 +332,9 @@ impl HostService {
     pub fn has_member(&self, peer_id: &PeerId) -> bool {
         self.state.members.contains(peer_id)
     }
+    pub fn bootstrap_through(&self, peer_id: PeerId) -> Option<u64> {
+        self.state.bootstrap_through.get(&peer_id).copied()
+    }
     pub fn add_member(
         &mut self,
         document: crate::crypto::identity::IdentityDocument,
@@ -328,12 +345,112 @@ impl HostService {
         if self.state.denied.contains(&peer_id) {
             return Err(Error::AuthenticationFailed);
         }
+        if self.state.members.contains(&peer_id) {
+            return Ok(());
+        }
         self.keys.import_peer(document.clone())?;
         let mut staged = self.stage_state()?;
         staged.identity_documents.insert(peer_id, document);
         staged.historical_members.insert(peer_id);
         staged.members.insert(peer_id);
-        self.publish_state(staged)
+        membership::archive_host(&self.keys, &mut staged)?;
+        let through = staged.next_control.saturating_sub(1);
+        let records = bootstrap_records(&staged, through)?;
+        let chunks = staged
+            .manifests
+            .values()
+            .map(|trusted| trusted.manifest().chunk_ids.len())
+            .try_fold(0usize, |total, count| total.checked_add(count))
+            .ok_or(Error::State("bootstrap frame count overflow"))?;
+        let frames = records
+            .len()
+            .checked_add(chunks)
+            .ok_or(Error::State("bootstrap frame count overflow"))?;
+        if frames > MAX_BOOTSTRAP_FRAMES {
+            return Err(Error::State("bootstrap exceeds frame budget"));
+        }
+        let mut bytes = 0usize;
+        for record in &records {
+            bytes = bytes
+                .checked_add(encoding::encode_control_record(record)?.len())
+                .and_then(|total| total.checked_add(BOOTSTRAP_FRAME_OVERHEAD))
+                .ok_or(Error::State("bootstrap byte count overflow"))?;
+        }
+        {
+            let store = staged
+                .chunks
+                .lock()
+                .map_err(|_| Error::State("chunk store poisoned"))?;
+            for trusted in staged.manifests.values() {
+                for chunk_id in &trusted.manifest().chunk_ids {
+                    bytes = bytes
+                        .checked_add(
+                            store
+                                .get(chunk_id)
+                                .ok_or(Error::State("committed plaintext missing"))?
+                                .len(),
+                        )
+                        .and_then(|total| total.checked_add(BOOTSTRAP_FRAME_OVERHEAD))
+                        .ok_or(Error::State("bootstrap byte count overflow"))?;
+                }
+            }
+        }
+        if bytes > MAX_BOOTSTRAP_BYTES {
+            return Err(Error::State("bootstrap exceeds byte budget"));
+        }
+        // Empty-vault membership setup remains usable before an in-process
+        // pair exists. Any actual snapshot frame requires encrypt-at-send.
+        let session = if frames == 0 {
+            None
+        } else {
+            Some(self.keys.current_session(peer_id)?)
+        };
+        let queued_at = unix_time()?;
+        let mut queue = VecDeque::new();
+        for record in records {
+            let session = session.as_ref().ok_or(Error::KeyUnavailable)?;
+            let packet = seal_control(&self.keys, session, &record)?;
+            queue.push_back(Queued {
+                envelope: control_envelope(&packet, queued_at)?,
+                content: QueueContent::Control(record),
+            });
+        }
+        {
+            let chunks = staged
+                .chunks
+                .lock()
+                .map_err(|_| Error::State("chunk store poisoned"))?;
+            for trusted in staged.manifests.values() {
+                let manifest = trusted.manifest();
+                for (index, &chunk_id) in manifest.chunk_ids.iter().enumerate() {
+                    let index = u64::try_from(index)
+                        .map_err(|_| Error::InvalidInput("chunk index overflow"))?;
+                    let plaintext = chunks
+                        .get(&chunk_id)
+                        .ok_or(Error::State("committed plaintext missing"))?;
+                    let session = session.as_ref().ok_or(Error::KeyUnavailable)?;
+                    let frame =
+                        encrypt_at_send(&self.keys, session, manifest.file_id, index, plaintext)?;
+                    queue.push_back(Queued {
+                        envelope: chunk_envelope(&frame, queued_at)?,
+                        content: QueueContent::Chunk {
+                            file_id: manifest.file_id,
+                            index,
+                            chunk_id,
+                        },
+                    });
+                }
+            }
+        }
+        self.keys.block_live_traffic(peer_id, staged.gate_owner)?;
+        staged.mailboxes.insert(peer_id, queue);
+        staged.bootstrap_through.insert(peer_id, through);
+        let result = self.publish_state(staged);
+        if result.is_err() {
+            self.keys
+                .unblock_live_traffic(peer_id, self.state.gate_owner)?;
+        }
+        result
     }
 
     fn require_running(&self) -> Result<()> {
@@ -511,16 +628,18 @@ impl HostService {
                         .manifest();
                     // Remove obsolete bodies, never instruction records. A replacement
                     // is appended at the end so its higher seq cannot precede older seqs.
+                    let bootstrap_pending = self.state.bootstrap_through.contains_key(&peer);
                     queue.retain(|entry| match entry.content {
                         QueueContent::Chunk {
                             file_id,
                             index,
                             chunk_id,
                         } if file_id == current.file_id => {
-                            usize::try_from(index)
-                                .ok()
-                                .and_then(|i| current.chunk_ids.get(i))
-                                == Some(&chunk_id)
+                            bootstrap_pending
+                                || usize::try_from(index)
+                                    .ok()
+                                    .and_then(|i| current.chunk_ids.get(i))
+                                    == Some(&chunk_id)
                         }
                         _ => true,
                     });
@@ -600,6 +719,7 @@ impl HostService {
             if let Some(target) = kicked {
                 staged.members.remove(&target);
                 staged.acked_through.remove(&target);
+                staged.bootstrap_through.remove(&target);
                 staged.mailboxes.remove(&target);
                 staged.online.remove(&target);
                 staged.denied.insert(target);
@@ -832,6 +952,7 @@ impl HostService {
             peer_id: peer,
             challenge: challenge.clone(),
             envelopes,
+            bootstrap_through: self.state.bootstrap_through.get(&peer).copied(),
         })
     }
 
@@ -839,6 +960,11 @@ impl HostService {
         self.require_running()?;
         if prepared.peer_id != peer || self.challenges.get(&peer) != Some(&prepared.challenge) {
             return Err(Error::AuthenticationFailed);
+        }
+        if self.state.bootstrap_through.get(&peer).copied() != prepared.bootstrap_through {
+            return Err(Error::State(
+                "bootstrap changed before flush acknowledgement",
+            ));
         }
         let current: Vec<_> = self
             .state
@@ -860,10 +986,12 @@ impl HostService {
                 _ => None,
             })
             .max()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(staged.bootstrap_through.get(&peer).copied().unwrap_or(0));
         let ack = staged.acked_through.entry(peer).or_default();
         *ack = (*ack).max(last);
         staged.mailboxes.remove(&peer);
+        staged.bootstrap_through.remove(&peer);
         self.publish_state(staged)?;
         self.challenges.remove(&peer);
         self.keys.unblock_live_traffic(peer, self.state.gate_owner)
@@ -896,8 +1024,11 @@ impl HostService {
         recipient
             .keys
             .block_live_traffic(self.state.host_id, self.state.gate_owner)?;
-        let staged = recipient
-            .prepare_mailbox_with_history(prepared.envelopes(), &self.historical_documents())?;
+        let staged = recipient.prepare_mailbox_with_bootstrap(
+            prepared.envelopes(),
+            &self.historical_documents(),
+            prepared.bootstrap_through(),
+        )?;
         let report = recipient.commit_prepared(staged)?;
         recipient.finish_receipts();
         self.acknowledge_flush(peer, prepared)?;
@@ -952,6 +1083,7 @@ impl MemberReplica {
             expected_root: FileId([0; 32]),
             tree: DirectoryTree::new(FileId([0; 32])),
             last_applied: 0,
+            bootstrap_through: 0,
         })
     }
     pub fn chunks(&self) -> SharedChunkStore {
@@ -996,6 +1128,7 @@ impl MemberReplica {
             manifests: self.manifests.clone(),
             controls: self.controls.clone(),
             log: self.log.clone(),
+            bootstrap_through: self.bootstrap_through,
         })
     }
     fn apply_staged(&mut self, mut staged: StagedReplica) -> Result<()> {
@@ -1005,7 +1138,8 @@ impl MemberReplica {
         let last = staged
             .log
             .last()
-            .map_or(self.last_applied, |record| record.id);
+            .map_or(self.last_applied, |record| record.id)
+            .max(staged.bootstrap_through);
         *self
             .chunks
             .lock()
@@ -1019,6 +1153,7 @@ impl MemberReplica {
         self.manifests = staged.manifests;
         self.controls = staged.controls;
         self.log = staged.log;
+        self.bootstrap_through = staged.bootstrap_through;
         self.last_applied = last;
         for peer in kicked {
             self.keys.discard_pair(peer)?;
@@ -1026,6 +1161,18 @@ impl MemberReplica {
         Ok(())
     }
     fn stage_control(&self, staged: &mut StagedReplica, record: &ControlRecord) -> Result<bool> {
+        self.stage_control_mode(staged, record, false)
+    }
+
+    fn stage_control_mode(
+        &self,
+        staged: &mut StagedReplica,
+        record: &ControlRecord,
+        accepted_snapshot: bool,
+    ) -> Result<bool> {
+        if record.id <= staged.bootstrap_through {
+            return Ok(false);
+        }
         if let Some(prior) = staged.controls.get(&record.id) {
             return if prior == record {
                 Ok(false)
@@ -1045,17 +1192,26 @@ impl MemberReplica {
         if let ControlUpdate::NewManifest(manifest) = &record.update {
             // H's authenticated history supplies admissions before the retained
             // record; a later Kick removes the writer from the running set.
-            if !staged.denied.contains(&manifest.writer_id)
+            if !accepted_snapshot
+                && !staged.denied.contains(&manifest.writer_id)
                 && staged.historical_members.contains(&manifest.writer_id)
             {
                 staged.members.insert(manifest.writer_id);
             }
-            let trusted = verify_record_manifest(
-                manifest.clone(),
-                &self.keys,
-                &staged.members,
-                &staged.identity_documents,
-            )?;
+            let trusted = if accepted_snapshot {
+                let writer = staged
+                    .identity_documents
+                    .get(&manifest.writer_id)
+                    .ok_or(Error::AuthenticationFailed)?;
+                TrustedManifest::verify_accepted(manifest.clone(), writer)?
+            } else {
+                verify_record_manifest(
+                    manifest.clone(),
+                    &self.keys,
+                    &staged.members,
+                    &staged.identity_documents,
+                )?
+            };
             staged.manifests.insert(trusted.manifest().file_id, trusted);
         }
         if let ControlUpdate::Kick(target) = &record.update {
@@ -1074,10 +1230,16 @@ impl MemberReplica {
         Ok(true)
     }
     fn check_header(&self, header: &PacketHeader) -> Result<()> {
-        if header.sender_id != self.host_id
+        let session = self.keys.current_session(self.host_id)?;
+        self.check_header_for_session(header, &session)
+    }
+
+    fn check_header_for_session(&self, header: &PacketHeader, session: &PairSession) -> Result<()> {
+        if session.peer_id != self.host_id
+            || header.sender_id != self.host_id
             || header.receiver_id != self.keys.peer_id()?
             || header.version != PROTOCOL_VERSION
-            || header.epoch != self.keys.current_session(self.host_id)?.epoch
+            || header.epoch != session.epoch
         {
             return Err(Error::AuthenticationFailed);
         }
@@ -1119,8 +1281,48 @@ impl MemberReplica {
         envelopes: &[MailboxEnvelope],
         history: &[IdentityDocument],
     ) -> Result<PreparedReplicaFlush> {
+        self.prepare_mailbox_with_bootstrap(envelopes, history, None)
+    }
+
+    pub fn prepare_mailbox_with_bootstrap(
+        &mut self,
+        envelopes: &[MailboxEnvelope],
+        history: &[IdentityDocument],
+        bootstrap_through: Option<u64>,
+    ) -> Result<PreparedReplicaFlush> {
+        let session = self.keys.current_session(self.host_id)?;
+        self.prepare_mailbox_for_session(envelopes, history, bootstrap_through, &session)
+    }
+
+    pub(crate) fn prepare_mailbox_for_session(
+        &mut self,
+        envelopes: &[MailboxEnvelope],
+        history: &[IdentityDocument],
+        bootstrap_through: Option<u64>,
+        session: &PairSession,
+    ) -> Result<PreparedReplicaFlush> {
+        if session.peer_id != self.host_id {
+            return Err(Error::AuthenticationFailed);
+        }
         self.receipts.retain(|(prior, _)| envelopes.contains(prior));
         let mut staged = self.stage()?;
+        let installing_bootstrap = match bootstrap_through {
+            Some(through) if through == self.bootstrap_through => None,
+            Some(through) if through < self.bootstrap_through || self.last_applied > through => {
+                return Err(Error::AuthenticationFailed);
+            }
+            Some(through) if through > self.bootstrap_through => {
+                if self.last_applied != 0 {
+                    return Err(Error::AuthenticationFailed);
+                }
+                staged.tree = DirectoryTree::new(self.expected_root);
+                staged.manifests.clear();
+                staged.controls.clear();
+                staged.log.clear();
+                Some(through)
+            }
+            _ => None,
+        };
         for document in history {
             document.verify()?;
             staged.historical_members.insert(document.peer_id);
@@ -1129,10 +1331,10 @@ impl MemberReplica {
                 .insert(document.peer_id, document.clone());
         }
         let mut report = FlushReport::default();
-        let session = self.keys.current_session(self.host_id)?;
         let mut last_packet = None;
         let mut last_chunk = None;
         let mut bodies = Vec::new();
+        let mut saw_bootstrap_end = installing_bootstrap == Some(0);
         for envelope in envelopes {
             let header = PacketHeader {
                 version: PROTOCOL_VERSION,
@@ -1141,7 +1343,7 @@ impl MemberReplica {
                 epoch: envelope.epoch,
                 seq: envelope.seq,
             };
-            self.check_header(&header)?;
+            self.check_header_for_session(&header, session)?;
             let frame = encoding::decode_mailbox_frame(&envelope.ciphertext)?;
             let last = match frame {
                 MailboxFrame::Control { .. } => &mut last_packet,
@@ -1180,7 +1382,7 @@ impl MemberReplica {
                             .ok_or(Error::AuthenticationFailed)?;
                         let plaintext = open_chunk(
                             &self.keys,
-                            &session,
+                            session,
                             &ChunkBodyFrame {
                                 header,
                                 file_id,
@@ -1205,7 +1407,12 @@ impl MemberReplica {
             }
             match &opened {
                 Opened::Control(record) => {
-                    if self.stage_control(&mut staged, record)? {
+                    let accepted_snapshot =
+                        installing_bootstrap.is_some_and(|through| record.id <= through);
+                    if accepted_snapshot && installing_bootstrap == Some(record.id) {
+                        saw_bootstrap_end = true;
+                    }
+                    if self.stage_control_mode(&mut staged, record, accepted_snapshot)? {
                         report.controls += 1;
                     }
                 }
@@ -1249,6 +1456,12 @@ impl MemberReplica {
                 report.chunks_written += 1;
             }
         }
+        if let Some(through) = installing_bootstrap {
+            if !saw_bootstrap_end {
+                return Err(Error::AuthenticationFailed);
+            }
+            staged.bootstrap_through = through;
+        }
         Ok(PreparedReplicaFlush {
             peer_id: self.keys.peer_id()?,
             host_id: self.host_id,
@@ -1279,6 +1492,68 @@ fn unix_time() -> Result<u64> {
         .duration_since(UNIX_EPOCH)
         .map(|time| time.as_secs())
         .map_err(|_| Error::State("clock predates Unix epoch"))
+}
+
+fn bootstrap_records(state: &HostState, through: u64) -> Result<Vec<ControlRecord>> {
+    let mut updates: Vec<_> = state
+        .manifests
+        .values()
+        .map(|trusted| ControlUpdate::NewManifest(trusted.manifest().clone()))
+        .collect();
+    let mut remaining: Vec<_> = state
+        .tree
+        .dirents()
+        .into_iter()
+        .filter(|entry| !entry.name.is_empty())
+        .collect();
+    let mut directories = BTreeSet::from([state.expected_root]);
+    while !remaining.is_empty() {
+        let before = remaining.len();
+        let mut deferred = Vec::new();
+        for entry in remaining {
+            if !directories.contains(&entry.parent) {
+                deferred.push(entry);
+                continue;
+            }
+            if entry.is_dir {
+                directories.insert(entry.child);
+            }
+            updates.push(ControlUpdate::Link {
+                parent: entry.parent,
+                name: entry.name,
+                child: entry.child,
+                is_dir: entry.is_dir,
+            });
+        }
+        if deferred.len() == before {
+            return Err(Error::State("replica tree is not rooted"));
+        }
+        remaining = deferred;
+    }
+    if updates.is_empty() && through != 0 {
+        updates.push(ControlUpdate::Add(FileId([0; 32])));
+    }
+    let count = u64::try_from(updates.len())
+        .map_err(|_| Error::State("bootstrap instruction count overflow"))?;
+    let first = through
+        .checked_sub(count)
+        .and_then(|id| id.checked_add(1))
+        .ok_or(Error::State("bootstrap state exceeds instruction history"))?;
+    updates
+        .into_iter()
+        .enumerate()
+        .map(|(offset, update)| {
+            Ok(ControlRecord {
+                id: first
+                    .checked_add(
+                        u64::try_from(offset)
+                            .map_err(|_| Error::State("bootstrap instruction id overflow"))?,
+                    )
+                    .ok_or(Error::State("bootstrap instruction id overflow"))?,
+                update,
+            })
+        })
+        .collect()
 }
 
 fn seal_control(
@@ -1380,6 +1655,163 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn fresh_member_receives_current_tree_after_host_log_truncation() -> Result<()> {
+        let directory = TestDirectory(std::env::temp_dir().join(format!(
+            "qfs-bootstrap-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )));
+        std::fs::create_dir(&directory.0)?;
+        let host_keys = KeyStore::open(&directory.0.join("host"))?;
+        let old_writer = KeyStore::open(&directory.0.join("old-writer"))?;
+        let member_keys = KeyStore::open(&directory.0.join("member"))?;
+        let host_id = host_keys.peer_id()?;
+        let old_writer_id = old_writer.peer_id()?;
+        let member_id = member_keys.peer_id()?;
+        host_keys.import_peer(old_writer.identity()?)?;
+        old_writer.import_peer(host_keys.identity()?)?;
+        member_keys.import_peer(host_keys.identity()?)?;
+        let (old_sender, old_receiver) = if host_id < old_writer_id {
+            (&host_keys, &old_writer)
+        } else {
+            (&old_writer, &host_keys)
+        };
+        let (_, old_wrap) = RustCryptoConstructionBWrap::new(old_sender.clone()).create(
+            old_receiver.peer_id()?,
+            &old_receiver.identity()?.ek,
+            Epoch(1),
+        )?;
+        RustCryptoConstructionBWrap::new(old_receiver.clone())
+            .unwrap(old_sender.peer_id()?, &old_wrap)?;
+        let host_data = directory.0.clone();
+        let mut host = HostService::open_durable(
+            host_keys.clone(),
+            &host_data,
+            FileId([0; 32]),
+            BTreeSet::from([host_id, old_writer_id]),
+        )?;
+        host.mkdir(host_id, "docs")?;
+        host.mkdir(host_id, "docs/old")?;
+        host.rename(host_id, "docs/old", "docs/current")?;
+        let file_id = host.save_file(&old_writer, "docs/current/note", &[b"baseline".to_vec()])?;
+        host.kick(old_writer_id)?;
+        assert!(host.instruction_log().is_empty());
+
+        host_keys.import_peer(member_keys.identity()?)?;
+        let (sender, receiver) = if host_id < member_id {
+            (&host_keys, &member_keys)
+        } else {
+            (&member_keys, &host_keys)
+        };
+        let (_, wrap) = RustCryptoConstructionBWrap::new(sender.clone()).create(
+            receiver.peer_id()?,
+            &receiver.identity()?.ek,
+            Epoch(1),
+        )?;
+        RustCryptoConstructionBWrap::new(receiver.clone()).unwrap(sender.peer_id()?, &wrap)?;
+        host.add_member(member_keys.identity()?)?;
+        host.save_file(&host_keys, "docs/current/note", &[b"latest".to_vec()])?;
+        let current_members = host.members().clone();
+        drop(host);
+        let mut host = HostService::open_durable(
+            host_keys.clone(),
+            &host_data,
+            FileId([0; 32]),
+            current_members,
+        )?;
+        let (_, restart_wrap) = RustCryptoConstructionBWrap::new(sender.clone()).create(
+            receiver.peer_id()?,
+            &receiver.identity()?.ek,
+            Epoch(2),
+        )?;
+        RustCryptoConstructionBWrap::new(receiver.clone())
+            .unwrap(sender.peer_id()?, &restart_wrap)?;
+        host.refresh_mailboxes()?;
+        assert_eq!(host.acked_through(member_id), 0);
+        let members = host.members().clone();
+        let replica_chunks = shared_chunk_store();
+        let mut replica = MemberReplica::new(
+            member_keys.clone(),
+            host_id,
+            members,
+            replica_chunks.clone(),
+        )?;
+        replica.reconcile_members(host.members(), host.denied())?;
+        let challenge = host.issue_flush_challenge(member_id)?;
+        let signature = RustCryptoPureMlDsa.sign(
+            &member_keys.signing_key()?,
+            FLUSH_CONTEXT,
+            &encoding::flush_m(&challenge),
+        )?;
+        let prepared = host.prepare_flush(member_id, &challenge, &signature)?;
+        let through = prepared
+            .bootstrap_through()
+            .ok_or(Error::State("bootstrap coverage missing"))?;
+        assert!(replica
+            .prepare_mailbox_with_bootstrap(
+                prepared.envelopes(),
+                &host.historical_documents(),
+                Some(through + 2),
+            )
+            .is_err());
+        assert!(replica.tree().resolve("docs").is_err());
+        assert!(replica.trusted_manifest(&file_id).is_none());
+        let staged = replica.prepare_mailbox_with_bootstrap(
+            prepared.envelopes(),
+            &host.historical_documents(),
+            Some(through),
+        )?;
+        replica.commit_prepared(staged)?;
+        let retry = replica.prepare_mailbox_with_bootstrap(
+            prepared.envelopes(),
+            &host.historical_documents(),
+            Some(through),
+        )?;
+        replica.commit_prepared(retry)?;
+        replica.finish_receipts();
+        host.acknowledge_flush(member_id, prepared)?;
+
+        assert_eq!(replica.tree().resolve("docs/current/note")?, file_id);
+        let trusted = replica
+            .trusted_manifest(&file_id)
+            .ok_or(Error::State("bootstrapped manifest missing"))?;
+        let chunk_id = trusted.manifest().chunk_ids[0];
+        assert_eq!(
+            replica_chunks
+                .lock()
+                .map_err(|_| Error::State("test lock poisoned"))?
+                .get(&chunk_id),
+            Some(b"latest".as_slice())
+        );
+        assert_eq!(host.acked_through(member_id), replica.last_applied());
+        assert!(!host.state.bootstrap_through.contains_key(&member_id));
+        Ok(())
+    }
+
+    #[test]
+    fn empty_bootstrap_after_deleted_history_has_authenticated_end_record() -> Result<()> {
+        let directory = TestDirectory(std::env::temp_dir().join(format!(
+            "qfs-empty-bootstrap-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )));
+        std::fs::create_dir(&directory.0)?;
+        let keys = KeyStore::open(&directory.0.join("host"))?;
+        let host_id = keys.peer_id()?;
+        let chunks = shared_chunk_store();
+        let mut host = HostService::new(keys, BTreeSet::from([host_id]), chunks)?;
+        host.mkdir(host_id, "temporary")?;
+        host.unlink(host_id, "temporary")?;
+        assert!(host.instruction_log().is_empty());
+
+        let records = bootstrap_records(&host.state, host.state.next_control - 1)?;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, 2);
+        assert!(matches!(records[0].update, ControlUpdate::Add(_)));
+        Ok(())
     }
 
     #[test]

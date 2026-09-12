@@ -178,6 +178,235 @@ impl RustCryptoConstructionBWrap {
         Self { store, kem }
     }
 
+    pub fn create_candidate(
+        &self,
+        peer_id: PeerId,
+        peer_ek: &[u8],
+        epoch: Epoch,
+    ) -> Result<(PairSession, WrapMessage)> {
+        self.create_inner(peer_id, peer_ek, epoch, true)
+    }
+
+    pub fn unwrap_candidate(
+        &self,
+        sender_id: PeerId,
+        message: &WrapMessage,
+    ) -> Result<PairSession> {
+        self.unwrap_inner(sender_id, message, true)
+    }
+
+    pub fn retry_candidate_collision(&self, peer_id: PeerId) -> Result<(PairSession, WrapMessage)> {
+        let (epoch, ek) = {
+            let inner = self.store.lock()?;
+            (
+                inner
+                    .candidate_retry_epochs
+                    .get(&peer_id)
+                    .copied()
+                    .ok_or(Error::State("no losing candidate wrap to retry"))?,
+                inner
+                    .peers
+                    .get(&peer_id)
+                    .ok_or(Error::KeyUnavailable)?
+                    .ek
+                    .clone(),
+            )
+        };
+        self.store.discard_candidate(peer_id)?;
+        self.create_candidate(peer_id, &ek, epoch)
+    }
+
+    fn create_inner(
+        &self,
+        peer_id: PeerId,
+        peer_ek: &[u8],
+        epoch: Epoch,
+        candidate: bool,
+    ) -> Result<(PairSession, WrapMessage)> {
+        let mut inner = self.store.lock()?;
+        let local_id = inner.local.document.peer_id;
+        let peer = inner.peers.get(&peer_id).ok_or(Error::KeyUnavailable)?;
+        if peer.ek != peer_ek {
+            return Err(Error::AuthenticationFailed);
+        }
+        if candidate && inner.candidates.contains_key(&peer_id) {
+            return Err(Error::State("peer admission candidate already exists"));
+        }
+        if !inner.pairs.contains_key(&peer_id) && local_id >= peer_id {
+            return Err(Error::State("smaller peer initiates first contact"));
+        }
+        let next = inner
+            .epoch_watermarks
+            .get(&peer_id)
+            .copied()
+            .unwrap_or(Epoch(0))
+            .0
+            .checked_add(1)
+            .ok_or(Error::State("epoch exhausted"))?;
+        if epoch.0 != next {
+            return Err(Error::InvalidInput("wrap must use the next epoch"));
+        }
+        let min_id = local_id.min(peer_id);
+        let max_id = local_id.max(peer_id);
+        let pair_key = Zeroizing::new(random_bytes::<32>()?);
+        let (secret, kem_ct) = self.kem.encapsulate(peer_ek)?;
+        let wrap_key = derive_wrap_key(&secret, min_id, max_id, epoch)?;
+        let cipher =
+            Gcm::new_from_slice(wrap_key.as_ref()).map_err(|_| Error::State("invalid wrap key"))?;
+        let wrap_ct = cipher
+            .encrypt(
+                &Nonce::from(encoding::WRAP_GCM_NONCE),
+                Payload {
+                    msg: pair_key.as_ref(),
+                    aad: &encoding::wrap_aad(&min_id, &max_id, epoch)?,
+                },
+            )
+            .map_err(|_| Error::AuthenticationFailed)?;
+        let mut message = WrapMessage {
+            kem_ct,
+            wrap_ct,
+            epoch,
+            min_id,
+            max_id,
+            signature: Vec::new(),
+        };
+        message.signature = RustCryptoPureMlDsa.sign(
+            &inner.local.signing_key,
+            WRAP_CONTEXT,
+            &encoding::wrap_m(&message)?,
+        )?;
+        if candidate {
+            inner.candidate_retry_epochs.remove(&peer_id);
+        } else {
+            inner.retry_epochs.remove(&peer_id);
+        }
+        let session = if candidate {
+            inner.install_candidate(peer_id, local_id, message.clone(), pair_key)?
+        } else {
+            inner.install(peer_id, local_id, message.clone(), pair_key)?
+        };
+        Ok((session, message))
+    }
+
+    fn unwrap_inner(
+        &self,
+        sender_id: PeerId,
+        message: &WrapMessage,
+        candidate: bool,
+    ) -> Result<PairSession> {
+        let mut inner = self.store.lock()?;
+        let local_id = inner.local.document.peer_id;
+        let sender = inner.peers.get(&sender_id).ok_or(Error::KeyUnavailable)?;
+        if message.min_id != local_id.min(sender_id) || message.max_id != local_id.max(sender_id) {
+            return Err(Error::AuthenticationFailed);
+        }
+        RustCryptoPureMlDsa.verify(
+            &sender.vk,
+            WRAP_CONTEXT,
+            &encoding::wrap_m(message)?,
+            &message.signature,
+        )?;
+        let existing = if candidate {
+            inner.candidates.get(&sender_id)
+        } else {
+            inner.pairs.get(&sender_id)
+        };
+        let mut collision = false;
+        let mut supersede = false;
+        let expected = Epoch(
+            inner
+                .epoch_watermarks
+                .get(&sender_id)
+                .copied()
+                .unwrap_or(Epoch(0))
+                .0
+                .checked_add(1)
+                .ok_or(Error::State("epoch exhausted"))?,
+        );
+        match existing {
+            None if !candidate && (sender_id >= local_id || message.epoch != expected) => {
+                return Err(Error::State("invalid first-contact initiator or epoch"));
+            }
+            Some(previous) if message.epoch < previous.epoch => {
+                return Err(Error::State("stale wrap epoch"));
+            }
+            Some(previous) if message.epoch == previous.epoch => {
+                if previous.initiator == sender_id && previous.wrap == *message {
+                    return inner.session(sender_id, message.epoch);
+                }
+                if previous.initiator <= sender_id {
+                    return Err(Error::EpochConflict {
+                        retry_epoch: Epoch(
+                            message
+                                .epoch
+                                .0
+                                .checked_add(1)
+                                .ok_or(Error::State("epoch exhausted"))?,
+                        ),
+                    });
+                }
+                collision = true;
+            }
+            Some(_) if candidate => supersede = true,
+            _ => {}
+        }
+        if candidate && !collision && message.epoch < expected {
+            return Err(Error::State("invalid candidate initiator or epoch"));
+        }
+        let secret = self
+            .kem
+            .decapsulate(&inner.local.decapsulation_key, &message.kem_ct)?;
+        let wrap_key = derive_wrap_key(&secret, message.min_id, message.max_id, message.epoch)?;
+        let cipher =
+            Gcm::new_from_slice(wrap_key.as_ref()).map_err(|_| Error::State("invalid wrap key"))?;
+        let plaintext = Zeroizing::new(
+            cipher
+                .decrypt(
+                    &Nonce::from(encoding::WRAP_GCM_NONCE),
+                    Payload {
+                        msg: &message.wrap_ct,
+                        aad: &encoding::wrap_aad(&message.min_id, &message.max_id, message.epoch)?,
+                    },
+                )
+                .map_err(|_| Error::AuthenticationFailed)?,
+        );
+        let key = Zeroizing::new(
+            plaintext
+                .as_slice()
+                .try_into()
+                .map_err(|_| Error::AuthenticationFailed)?,
+        );
+        if collision {
+            let retry = Epoch(
+                message
+                    .epoch
+                    .0
+                    .checked_add(1)
+                    .ok_or(Error::State("epoch exhausted"))?,
+            );
+            if candidate {
+                inner.candidate_retry_epochs.insert(sender_id, retry);
+            } else {
+                inner.retry_epochs.insert(sender_id, retry);
+            }
+        }
+        if candidate {
+            if supersede || collision {
+                if let Some(previous) = inner.candidates.remove(&sender_id) {
+                    inner
+                        .keys
+                        .retain(|_, key| key.peer_id != sender_id || key.epoch != previous.epoch);
+                }
+                if supersede {
+                    inner.candidate_retry_epochs.remove(&sender_id);
+                }
+            }
+            inner.install_candidate(sender_id, sender_id, message.clone(), key)
+        } else {
+            inner.install(sender_id, sender_id, message.clone(), key)
+        }
+    }
+
     /// Explicitly carry out the losing initiator's retry at last-before-collision+2.
     pub fn retry_collision(&self, peer_id: PeerId) -> Result<(PairSession, WrapMessage)> {
         let (epoch, ek) = {
@@ -226,146 +455,11 @@ impl ConstructionBWrap for RustCryptoConstructionBWrap {
         peer_ek: &[u8],
         epoch: Epoch,
     ) -> Result<(PairSession, WrapMessage)> {
-        let mut inner = self.store.lock()?;
-        let local_id = inner.local.document.peer_id;
-        let peer = inner.peers.get(&peer_id).ok_or(Error::KeyUnavailable)?;
-        if peer.ek != peer_ek {
-            return Err(Error::AuthenticationFailed);
-        }
-        if !inner.pairs.contains_key(&peer_id) && local_id >= peer_id {
-            return Err(Error::State("smaller peer initiates first contact"));
-        }
-        let next = inner
-            .epoch_watermarks
-            .get(&peer_id)
-            .copied()
-            .unwrap_or(Epoch(0))
-            .0
-            .checked_add(1)
-            .ok_or(Error::State("epoch exhausted"))?;
-        if epoch.0 != next {
-            return Err(Error::InvalidInput("wrap must use the next epoch"));
-        }
-        let min_id = local_id.min(peer_id);
-        let max_id = local_id.max(peer_id);
-        let pair_key = Zeroizing::new(random_bytes::<32>()?);
-        let (secret, kem_ct) = self.kem.encapsulate(peer_ek)?;
-        let wrap_key = derive_wrap_key(&secret, min_id, max_id, epoch)?;
-        let cipher =
-            Gcm::new_from_slice(wrap_key.as_ref()).map_err(|_| Error::State("invalid wrap key"))?;
-        let wrap_ct = cipher
-            .encrypt(
-                &Nonce::from(encoding::WRAP_GCM_NONCE),
-                Payload {
-                    msg: pair_key.as_ref(),
-                    aad: &encoding::wrap_aad(&min_id, &max_id, epoch)?,
-                },
-            )
-            .map_err(|_| Error::AuthenticationFailed)?;
-        let mut message = WrapMessage {
-            kem_ct,
-            wrap_ct,
-            epoch,
-            min_id,
-            max_id,
-            signature: Vec::new(),
-        };
-        message.signature = RustCryptoPureMlDsa.sign(
-            &inner.local.signing_key,
-            WRAP_CONTEXT,
-            &encoding::wrap_m(&message)?,
-        )?;
-        inner.retry_epochs.remove(&peer_id);
-        let session = inner.install(peer_id, local_id, message.clone(), pair_key)?;
-        Ok((session, message))
+        self.create_inner(peer_id, peer_ek, epoch, false)
     }
 
     fn unwrap(&self, sender_id: PeerId, message: &WrapMessage) -> Result<PairSession> {
-        let mut inner = self.store.lock()?;
-        let local_id = inner.local.document.peer_id;
-        let sender = inner.peers.get(&sender_id).ok_or(Error::KeyUnavailable)?;
-        if message.min_id != local_id.min(sender_id) || message.max_id != local_id.max(sender_id) {
-            return Err(Error::AuthenticationFailed);
-        }
-        RustCryptoPureMlDsa.verify(
-            &sender.vk,
-            WRAP_CONTEXT,
-            &encoding::wrap_m(message)?,
-            &message.signature,
-        )?;
-        let mut collision = false;
-        let expected_first = Epoch(
-            inner
-                .epoch_watermarks
-                .get(&sender_id)
-                .copied()
-                .unwrap_or(Epoch(0))
-                .0
-                .checked_add(1)
-                .ok_or(Error::State("epoch exhausted"))?,
-        );
-        match inner.pairs.get(&sender_id) {
-            None if sender_id >= local_id || message.epoch != expected_first => {
-                return Err(Error::State("invalid first-contact initiator or epoch"));
-            }
-            Some(previous) if message.epoch < previous.epoch => {
-                return Err(Error::State("stale wrap epoch"));
-            }
-            Some(previous) if message.epoch == previous.epoch => {
-                if previous.initiator == sender_id && previous.wrap == *message {
-                    return inner.session(sender_id, message.epoch);
-                }
-                if previous.initiator <= sender_id {
-                    return Err(Error::EpochConflict {
-                        retry_epoch: Epoch(
-                            message
-                                .epoch
-                                .0
-                                .checked_add(1)
-                                .ok_or(Error::State("epoch exhausted"))?,
-                        ),
-                    });
-                }
-                collision = true;
-            }
-            _ => {}
-        }
-        let secret = self
-            .kem
-            .decapsulate(&inner.local.decapsulation_key, &message.kem_ct)?;
-        let wrap_key = derive_wrap_key(&secret, message.min_id, message.max_id, message.epoch)?;
-        let cipher =
-            Gcm::new_from_slice(wrap_key.as_ref()).map_err(|_| Error::State("invalid wrap key"))?;
-        let plaintext = Zeroizing::new(
-            cipher
-                .decrypt(
-                    &Nonce::from(encoding::WRAP_GCM_NONCE),
-                    Payload {
-                        msg: &message.wrap_ct,
-                        aad: &encoding::wrap_aad(&message.min_id, &message.max_id, message.epoch)?,
-                    },
-                )
-                .map_err(|_| Error::AuthenticationFailed)?,
-        );
-        let key = Zeroizing::new(
-            plaintext
-                .as_slice()
-                .try_into()
-                .map_err(|_| Error::AuthenticationFailed)?,
-        );
-        if collision {
-            inner.retry_epochs.insert(
-                sender_id,
-                Epoch(
-                    message
-                        .epoch
-                        .0
-                        .checked_add(1)
-                        .ok_or(Error::State("epoch exhausted"))?,
-                ),
-            );
-        }
-        inner.install(sender_id, sender_id, message.clone(), key)
+        self.unwrap_inner(sender_id, message, false)
     }
 
     fn retry(&self, message: &WrapMessage) -> Result<WrapMessage> {
@@ -373,6 +467,7 @@ impl ConstructionBWrap for RustCryptoConstructionBWrap {
         if inner
             .pairs
             .values()
+            .chain(inner.candidates.values())
             .any(|pair| pair.initiator == inner.local.document.peer_id && pair.wrap == *message)
         {
             Ok(message.clone())

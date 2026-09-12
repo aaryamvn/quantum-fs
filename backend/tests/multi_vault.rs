@@ -126,6 +126,22 @@ async fn two_vault_server(
     tokio::task::JoinHandle<()>,
 )> {
     let keys = KeyStore::open(&directory.0.join("identity"))?;
+    two_vault_server_with_keys(directory, keys).await
+}
+
+async fn two_vault_server_with_keys(
+    directory: &TestDir,
+    keys: KeyStore,
+) -> Result<(
+    KeyStore,
+    VaultSet,
+    Rc<RefCell<VaultHost>>,
+    Rc<RefCell<VaultHost>>,
+    DirectoryAd,
+    DirectoryAd,
+    tokio::task::JoinHandle<()>,
+    tokio::task::JoinHandle<()>,
+)> {
     let first = create_vault(keys.clone(), &directory.0)?;
     let second = create_vault(keys.clone(), &directory.0)?;
     let set = VaultSet::new(keys.clone())?;
@@ -380,21 +396,17 @@ async fn serve_host_retries_identical_wrap_after_lost_ack() -> Result<()> {
     let directory = TestDir::new("host-wrap-retry")?;
     LocalSet::new()
         .run_until(async {
-            let (host_keys, _set, first, _second, first_ad, _second_ad, server, directory_task) =
-                two_vault_server(&directory).await?;
-            let host_id = host_keys.peer_id()?;
-            let mut rejected_members = Vec::new();
-            let member = loop {
-                let candidate = KeyStore::open(
-                    &directory
-                        .0
-                        .join(format!("retry-member-{}", rejected_members.len())),
-                )?;
-                if host_id < candidate.peer_id()? {
-                    break candidate;
-                }
-                rejected_members.push(candidate);
+            let first_identity = KeyStore::open(&directory.0.join("retry-identity-a"))?;
+            let second_identity = KeyStore::open(&directory.0.join("retry-identity-b"))?;
+            let (lower, member) = if first_identity.peer_id()? < second_identity.peer_id()? {
+                (first_identity, second_identity)
+            } else {
+                (second_identity, first_identity)
             };
+            let (host_keys, _set, first, _second, first_ad, _second_ad, server, directory_task) =
+                two_vault_server_with_keys(&directory, lower).await?;
+            let host_id = host_keys.peer_id()?;
+            assert!(host_id < member.peer_id()?);
             let member_id = member.peer_id()?;
             let code = first.borrow().join_code();
             let target = first_ad.addr;
@@ -414,7 +426,10 @@ async fn serve_host_retries_identical_wrap_after_lost_ack() -> Result<()> {
             assert!(join_host(member.clone(), &first_ad, code, None)
                 .await
                 .is_err());
-            let _ = first_proxy_task.await;
+            tokio::time::timeout(Duration::from_secs(7), first_proxy_task)
+                .await
+                .map_err(|_| Error::State("first lost-ack proxy did not stop"))?
+                .map_err(|_| Error::State("first lost-ack proxy task failed"))?;
             assert!(host_keys.current_session(member_id).is_ok());
             assert!(member.current_session(host_id).is_ok());
 
@@ -435,6 +450,12 @@ async fn serve_host_retries_identical_wrap_after_lost_ack() -> Result<()> {
             assert!(*first_capture.borrow() == *second_capture.borrow());
             drop(joined);
             second_proxy_task.abort();
+            let stopped = tokio::time::timeout(Duration::from_secs(7), second_proxy_task)
+                .await
+                .map_err(|_| Error::State("second lost-ack proxy did not stop"))?;
+            if stopped.is_err_and(|error| !error.is_cancelled()) {
+                return Err(Error::State("second lost-ack proxy task failed"));
+            }
             server.abort();
             directory_task.abort();
             Ok(())

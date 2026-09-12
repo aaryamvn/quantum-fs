@@ -26,6 +26,7 @@ use crate::{
 };
 
 pub(crate) const MAX_STORE_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_ADMISSION_CANDIDATES: usize = 32;
 
 #[derive(Clone)]
 pub struct KeyStore {
@@ -36,12 +37,15 @@ pub(crate) struct StoreInner {
     pub(crate) local: LocalIdentity,
     pub(crate) peers: BTreeMap<PeerId, IdentityDocument>,
     pub(crate) pairs: BTreeMap<PeerId, PersistedPair>,
+    pub(crate) candidates: BTreeMap<PeerId, PersistedPair>,
     pub(crate) keys: BTreeMap<u64, PairKeyState>,
     pub(crate) retry_epochs: BTreeMap<PeerId, Epoch>,
+    pub(crate) candidate_retry_epochs: BTreeMap<PeerId, Epoch>,
     pub(crate) epoch_watermarks: BTreeMap<PeerId, Epoch>,
     pub(crate) instance_id: [u8; 32],
     pub(crate) next_slot: u64,
     pub(crate) mailbox_gates: BTreeMap<PeerId, BTreeSet<u64>>,
+    admitted_pairs: BTreeMap<PeerId, Epoch>,
     identity_path: PathBuf,
     state_path: PathBuf,
     _lock: File,
@@ -53,6 +57,7 @@ pub(crate) struct PersistedState {
     pub(crate) next_slot: u64,
     pub(crate) peers: Vec<IdentityDocument>,
     pub(crate) pairs: Vec<PersistedPair>,
+    pub(crate) candidates: Vec<PersistedPair>,
     pub(crate) keys: Vec<PersistedKey>,
     pub(crate) epoch_watermarks: Vec<(PeerId, Epoch)>,
 }
@@ -145,12 +150,15 @@ impl KeyStore {
             local,
             peers: BTreeMap::new(),
             pairs: BTreeMap::new(),
+            candidates: BTreeMap::new(),
             keys: BTreeMap::new(),
             retry_epochs: BTreeMap::new(),
+            candidate_retry_epochs: BTreeMap::new(),
             epoch_watermarks: BTreeMap::new(),
             instance_id: random_bytes()?,
             next_slot: 0,
             mailbox_gates: BTreeMap::new(),
+            admitted_pairs: BTreeMap::new(),
             identity_path: path.to_owned(),
             state_path,
             _lock: lock,
@@ -211,6 +219,46 @@ impl KeyStore {
                     .or_insert(Epoch(0));
                 *watermark = (*watermark).max(pair_epoch);
             }
+            if persisted.candidates.len() > MAX_ADMISSION_CANDIDATES {
+                return Err(Error::InvalidInput(
+                    "too many persisted admission candidates",
+                ));
+            }
+            // Admission candidates never survive a process restart, but only
+            // a canonical authenticated candidate may raise the durable floor.
+            let mut candidate_peers = BTreeSet::new();
+            for candidate in persisted.candidates {
+                let peer = inner
+                    .peers
+                    .get(&candidate.peer_id)
+                    .ok_or(Error::AuthenticationFailed)?;
+                let local_id = inner.local.document.peer_id;
+                let signer = if candidate.initiator == local_id {
+                    &inner.local.document
+                } else if candidate.initiator == peer.peer_id {
+                    peer
+                } else {
+                    return Err(Error::AuthenticationFailed);
+                };
+                if candidate.epoch != candidate.wrap.epoch
+                    || candidate.wrap.min_id != local_id.min(peer.peer_id)
+                    || candidate.wrap.max_id != local_id.max(peer.peer_id)
+                    || !candidate_peers.insert(candidate.peer_id)
+                {
+                    return Err(Error::AuthenticationFailed);
+                }
+                RustCryptoPureMlDsa.verify(
+                    &signer.vk,
+                    WRAP_CONTEXT,
+                    &encoding::wrap_m(&candidate.wrap)?,
+                    &candidate.wrap.signature,
+                )?;
+                let watermark = inner
+                    .epoch_watermarks
+                    .entry(candidate.peer_id)
+                    .or_insert(Epoch(0));
+                *watermark = (*watermark).max(candidate.epoch);
+            }
             // Decoded prior K_ab bytes are zeroized here and never activated.
             drop(persisted.keys);
         }
@@ -234,13 +282,10 @@ impl KeyStore {
                 .collect()
         };
         let wraps = RustCryptoConstructionBWrap::new(store.clone());
-        for (peer, previous) in pairs {
-            let next = Epoch(previous.map_or(Ok(1), |epoch| {
-                epoch
-                    .0
-                    .checked_add(1)
-                    .ok_or(Error::State("epoch exhausted"))
-            })?);
+        for (peer, _previous) in pairs {
+            // A discarded restart candidate can be newer than the confirmed
+            // pair. Always prepare above the durable maximum.
+            let next = store.next_epoch(&peer.peer_id)?;
             wraps.create(peer.peer_id, &peer.ek, next)?;
         }
         Ok(store)
@@ -325,6 +370,7 @@ impl KeyStore {
         Ok(inner
             .pairs
             .values()
+            .chain(inner.candidates.values())
             .filter(|pair| pair.initiator == inner.local.document.peer_id)
             .map(|pair| pair.wrap.clone())
             .collect())
@@ -349,6 +395,83 @@ impl KeyStore {
             .map(|pair| (pair.initiator, pair.wrap.clone())))
     }
 
+    pub fn cached_candidate(&self, peer_id: PeerId) -> Result<Option<(PeerId, WrapMessage)>> {
+        Ok(self
+            .lock()?
+            .candidates
+            .get(&peer_id)
+            .map(|pair| (pair.initiator, pair.wrap.clone())))
+    }
+
+    pub fn candidate_session(&self, peer_id: PeerId) -> Result<PairSession> {
+        let inner = self.lock()?;
+        let epoch = inner
+            .candidates
+            .get(&peer_id)
+            .map(|pair| pair.epoch)
+            .ok_or(Error::KeyUnavailable)?;
+        inner.session(peer_id, epoch)
+    }
+
+    pub(crate) fn mark_admitted(&self, peer_id: PeerId) -> Result<()> {
+        let mut inner = self.lock()?;
+        let epoch = inner
+            .pairs
+            .get(&peer_id)
+            .map(|pair| pair.epoch)
+            .ok_or(Error::KeyUnavailable)?;
+        inner.session(peer_id, epoch)?;
+        inner.admitted_pairs.insert(peer_id, epoch);
+        Ok(())
+    }
+
+    pub(crate) fn has_admitted_pair(&self, peer_id: PeerId) -> Result<bool> {
+        let inner = self.lock()?;
+        Ok(inner.admitted_pairs.get(&peer_id).is_some_and(|epoch| {
+            inner
+                .pairs
+                .get(&peer_id)
+                .is_some_and(|pair| pair.epoch == *epoch)
+                && inner.session(peer_id, *epoch).is_ok()
+        }))
+    }
+
+    pub fn promote_candidate(&self, peer_id: PeerId, epoch: Epoch) -> Result<PairSession> {
+        let mut inner = self.lock()?;
+        let candidate = inner
+            .candidates
+            .remove(&peer_id)
+            .ok_or(Error::KeyUnavailable)?;
+        if candidate.epoch != epoch {
+            inner.candidates.insert(peer_id, candidate);
+            return Err(Error::State("candidate epoch changed before admission"));
+        }
+        if inner
+            .pairs
+            .get(&peer_id)
+            .is_some_and(|confirmed| candidate.epoch <= confirmed.epoch)
+        {
+            inner.candidates.insert(peer_id, candidate);
+            return Err(Error::State("candidate is not newer than confirmed pair"));
+        }
+        inner.pairs.insert(peer_id, candidate);
+        inner.candidate_retry_epochs.remove(&peer_id);
+        inner.persist()?;
+        inner.session(peer_id, epoch)
+    }
+
+    pub fn discard_candidate(&self, peer_id: PeerId) -> Result<()> {
+        let mut inner = self.lock()?;
+        if let Some(candidate) = inner.candidates.remove(&peer_id) {
+            inner
+                .keys
+                .retain(|_, key| key.peer_id != peer_id || key.epoch != candidate.epoch);
+            inner.candidate_retry_epochs.remove(&peer_id);
+            inner.persist()?;
+        }
+        Ok(())
+    }
+
     /// Erases all provisional pair and peer state after admission fails.
     /// WrapAck timeouts must retain the pair instead so retry can resend the
     /// identical cached ciphertext.
@@ -356,9 +479,12 @@ impl KeyStore {
         let mut inner = self.lock()?;
         inner.keys.retain(|_, state| state.peer_id != peer_id);
         inner.pairs.remove(&peer_id);
+        inner.candidates.remove(&peer_id);
         inner.retry_epochs.remove(&peer_id);
+        inner.candidate_retry_epochs.remove(&peer_id);
         inner.mailbox_gates.remove(&peer_id);
         inner.peers.remove(&peer_id);
+        inner.admitted_pairs.remove(&peer_id);
         inner.persist()
     }
 
@@ -385,6 +511,10 @@ impl KeyStore {
     /// A collision loser must initiate at the next epoch (last-before-collision + 2).
     pub fn retry_epoch(&self, peer_id: &PeerId) -> Result<Option<Epoch>> {
         Ok(self.lock()?.retry_epochs.get(peer_id).copied())
+    }
+
+    pub(crate) fn candidate_retry_epoch(&self, peer_id: &PeerId) -> Result<Option<Epoch>> {
+        Ok(self.lock()?.candidate_retry_epochs.get(peer_id).copied())
     }
 
     pub fn next_epoch(&self, peer_id: &PeerId) -> Result<Epoch> {
@@ -546,12 +676,48 @@ impl StoreInner {
         self.session(peer_id, epoch)
     }
 
+    pub(crate) fn install_candidate(
+        &mut self,
+        peer_id: PeerId,
+        initiator: PeerId,
+        message: WrapMessage,
+        key: Zeroizing<[u8; 32]>,
+    ) -> Result<PairSession> {
+        if self.candidates.contains_key(&peer_id) {
+            return Err(Error::State("peer admission candidate already exists"));
+        }
+        if self.candidates.len() >= MAX_ADMISSION_CANDIDATES {
+            return Err(Error::State("too many retained admission candidates"));
+        }
+        let epoch = message.epoch;
+        let slot = self.next_slot;
+        self.next_slot = slot
+            .checked_add(1)
+            .ok_or(Error::State("keystore slots exhausted"))?;
+        self.keys
+            .insert(slot, PairKeyState::new(key, peer_id, epoch));
+        let watermark = self.epoch_watermarks.entry(peer_id).or_insert(Epoch(0));
+        *watermark = (*watermark).max(epoch);
+        self.candidates.insert(
+            peer_id,
+            PersistedPair {
+                peer_id,
+                epoch,
+                initiator,
+                wrap: message,
+            },
+        );
+        self.persist()?;
+        self.session(peer_id, epoch)
+    }
+
     pub(crate) fn persist(&mut self) -> Result<()> {
         let state = PersistedState {
             local_id: self.local.document.peer_id,
             next_slot: self.next_slot,
             peers: self.peers.values().cloned().collect(),
             pairs: self.pairs.values().cloned().collect(),
+            candidates: self.candidates.values().cloned().collect(),
             keys: self
                 .keys
                 .iter()
@@ -807,6 +973,109 @@ mod tests {
             ));
             reopened.import_peer(high_identity.clone())?;
             assert_eq!(reopened.next_epoch(&high_identity.peer_id)?, Epoch(9));
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(directory);
+        result
+    }
+
+    #[test]
+    fn admission_candidate_does_not_replace_confirmed_pair() -> Result<()> {
+        let directory = std::env::temp_dir().join(format!(
+            "qfs-keystore-candidate-{}-{}",
+            std::process::id(),
+            u64::from_be_bytes(super::random_bytes()?)
+        ));
+        std::fs::create_dir(&directory)?;
+        let result = (|| -> Result<()> {
+            let first_path = directory.join("first");
+            let second_path = directory.join("second");
+            let first = KeyStore::open(&first_path)?;
+            let second = KeyStore::open(&second_path)?;
+            let first_identity = first.identity()?;
+            let second_identity = second.identity()?;
+            let first_is_low = first_identity.peer_id < second_identity.peer_id;
+            let (low, low_identity, high, high_identity) = if first_is_low {
+                (first, first_identity, second, second_identity)
+            } else {
+                (second, second_identity, first, first_identity)
+            };
+            let low_path = if first_is_low {
+                first_path
+            } else {
+                second_path
+            };
+            low.import_peer(high_identity.clone())?;
+            high.import_peer(low_identity.clone())?;
+            let low_wrap = RustCryptoConstructionBWrap::new(low.clone());
+            let high_wrap = RustCryptoConstructionBWrap::new(high.clone());
+            let (_, confirmed_wrap) =
+                low_wrap.create(high_identity.peer_id, &high_identity.ek, Epoch(1))?;
+            high_wrap.unwrap(low_identity.peer_id, &confirmed_wrap)?;
+
+            let (_, candidate_wrap) =
+                low_wrap.create_candidate(high_identity.peer_id, &high_identity.ek, Epoch(2))?;
+            high_wrap.unwrap_candidate(low_identity.peer_id, &candidate_wrap)?;
+            assert!(low_wrap.retry(&candidate_wrap)? == candidate_wrap);
+            assert_eq!(low.current_session(high_identity.peer_id)?.epoch, Epoch(1));
+            assert_eq!(high.current_session(low_identity.peer_id)?.epoch, Epoch(1));
+            assert_eq!(
+                low.candidate_session(high_identity.peer_id)?.epoch,
+                Epoch(2)
+            );
+            assert_eq!(
+                high.candidate_session(low_identity.peer_id)?.epoch,
+                Epoch(2)
+            );
+            assert!(high_wrap
+                .unwrap_candidate(low_identity.peer_id, &confirmed_wrap)
+                .is_err());
+            assert_eq!(
+                high.candidate_session(low_identity.peer_id)?.epoch,
+                Epoch(2)
+            );
+
+            low.discard_candidate(high_identity.peer_id)?;
+            let (_, newer_wrap) =
+                low_wrap.create_candidate(high_identity.peer_id, &high_identity.ek, Epoch(3))?;
+            high_wrap.unwrap_candidate(low_identity.peer_id, &newer_wrap)?;
+            assert_eq!(high.current_session(low_identity.peer_id)?.epoch, Epoch(1));
+            assert_eq!(
+                high.candidate_session(low_identity.peer_id)?.epoch,
+                Epoch(3)
+            );
+
+            low.discard_candidate(high_identity.peer_id)?;
+            high.discard_candidate(low_identity.peer_id)?;
+            let (_, high_candidate) =
+                high_wrap.create_candidate(low_identity.peer_id, &low_identity.ek, Epoch(4))?;
+            low_wrap.unwrap_candidate(high_identity.peer_id, &high_candidate)?;
+            assert_eq!(low.current_session(high_identity.peer_id)?.epoch, Epoch(1));
+            assert_eq!(high.current_session(low_identity.peer_id)?.epoch, Epoch(1));
+            low.discard_candidate(high_identity.peer_id)?;
+            high.discard_candidate(low_identity.peer_id)?;
+            assert_eq!(low.current_session(high_identity.peer_id)?.epoch, Epoch(1));
+            assert_eq!(high.current_session(low_identity.peer_id)?.epoch, Epoch(1));
+            low_wrap.create_candidate(high_identity.peer_id, &high_identity.ek, Epoch(5))?;
+            low_wrap.create(high_identity.peer_id, &high_identity.ek, Epoch(6))?;
+            assert!(low
+                .promote_candidate(high_identity.peer_id, Epoch(5))
+                .is_err());
+            assert_eq!(low.current_session(high_identity.peer_id)?.epoch, Epoch(6));
+            assert_eq!(
+                low.candidate_session(high_identity.peer_id)?.epoch,
+                Epoch(5)
+            );
+            drop(low_wrap);
+            drop(high_wrap);
+            drop(high);
+            drop(low);
+            let reopened = KeyStore::open(&low_path)?;
+            assert_eq!(
+                reopened.current_session(high_identity.peer_id)?.epoch,
+                Epoch(7)
+            );
+            assert!(reopened.cached_candidate(high_identity.peer_id)?.is_none());
             Ok(())
         })();
         let _ = std::fs::remove_dir_all(directory);

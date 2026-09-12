@@ -3,6 +3,7 @@ use crate::{
     crypto::{
         identity::IdentityDocument,
         sign::{PureMlDsa, RustCryptoPureMlDsa, JOIN_CONTEXT, MANIFEST_CONTEXT},
+        wrap::PairSession,
     },
     demo_log::{self, Kind},
     encoding,
@@ -60,6 +61,7 @@ pub struct FlushOffer {
     pub challenge: crate::sync::host::FlushChallenge,
     pub frame_count: u32,
     pub historical: Vec<IdentityDocument>,
+    pub bootstrap_through: Option<u64>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -355,6 +357,29 @@ impl Drop for CounterPermit {
     }
 }
 
+struct HandshakePermit {
+    peers: Rc<RefCell<BTreeSet<PeerId>>>,
+    peer: PeerId,
+}
+
+impl HandshakePermit {
+    fn acquire(peers: &Rc<RefCell<BTreeSet<PeerId>>>, peer: PeerId) -> Result<Self> {
+        if !peers.borrow_mut().insert(peer) {
+            return Err(Error::State("peer handshake already in progress"));
+        }
+        Ok(Self {
+            peers: peers.clone(),
+            peer,
+        })
+    }
+}
+
+impl Drop for HandshakePermit {
+    fn drop(&mut self) {
+        self.peers.borrow_mut().remove(&self.peer);
+    }
+}
+
 struct PeerPermit {
     vault: Rc<RefCell<VaultHost>>,
     vaults: crate::net::vaults::VaultSet,
@@ -386,6 +411,7 @@ where
     let vaults = vaults.into();
     let connections = Rc::new(Cell::new(0));
     let provisional = Rc::new(Cell::new(0));
+    let handshakes = Rc::new(RefCell::new(BTreeSet::new()));
     loop {
         let _ = vaults.take_disconnects();
         let (mut stream, _) = tokio::select! {
@@ -399,26 +425,32 @@ where
             continue;
         };
         let vaults = vaults.clone();
+        let handshakes = handshakes.clone();
         tokio::task::spawn_local(async move {
             let _connection = connection;
             let mut progress = HandshakeProgress::default();
             let keys = vaults.keys();
+            let mut handshake_permit = None;
             let admission = tokio::time::timeout(HANDSHAKE_DEADLINE, async {
                 let established = session::establish_guarded(
                     &mut stream,
                     &keys,
                     None,
                     &mut progress,
-                    |peer_id| vaults.has_confirmed_pair(peer_id),
+                    |peer_id| {
+                        handshake_permit = Some(HandshakePermit::acquire(&handshakes, peer_id)?);
+                        Ok(vaults.has_confirmed_pair(peer_id))
+                    },
                 )
                 .await?;
                 let peer = established.peer;
-                let frame = read_after_ack(&mut stream, established.session.epoch).await?;
+                let selected = established.session;
+                let frame = read_after_ack(&mut stream, selected.epoch).await?;
                 if frame.kind != frame::GCM_PACKET_KIND {
-                    let denial = send_control(
+                    let denial = send_control_for_session(
                         &mut stream,
                         &keys,
-                        peer.peer_id,
+                        &selected,
                         &NetControl::AdmissionDenied,
                     )
                     .await;
@@ -430,15 +462,15 @@ where
                 }
                 let request = match (|| -> Result<_> {
                     let packet = encoding::decode_control_packet(&frame.payload)?;
-                    let plaintext = session::open_packet(&keys, peer.peer_id, &packet)?;
+                    let plaintext = session::open_packet_with_session(&keys, &selected, &packet)?;
                     encoding::decode_join_request(&plaintext, &peer)
                 })() {
                     Ok(request) => request,
                     Err(error) => {
-                        let denial = send_control(
+                        let denial = send_control_for_session(
                             &mut stream,
                             &keys,
-                            peer.peer_id,
+                            &selected,
                             &NetControl::AdmissionDenied,
                         )
                         .await;
@@ -451,16 +483,18 @@ where
                 };
                 if let Some(bound) = vaults.bound_vault(peer.peer_id) {
                     if bound != request.vault_id {
-                        send_control(
+                        let denial = send_control_for_session(
                             &mut stream,
                             &keys,
-                            peer.peer_id,
+                            &selected,
                             &NetControl::JoinRejected {
                                 bound,
                                 requested: request.vault_id,
                             },
                         )
-                        .await?;
+                        .await;
+                        discard_rejected_candidate(&keys, &selected, progress.had_pair)?;
+                        denial?;
                         return Err(Error::VaultSessionConflict {
                             peer_id: peer.peer_id,
                             bound,
@@ -482,6 +516,16 @@ where
                             return Err(error);
                         }
                     }
+                    if keys
+                        .candidate_session(peer.peer_id)
+                        .is_ok_and(|s| s.epoch == selected.epoch)
+                    {
+                        let old = keys.current_session(peer.peer_id)?;
+                        keys.promote_candidate(peer.peer_id, selected.epoch)?;
+                        // active_peers rejected any still-live old TCP before promotion.
+                        // Mailboxes retain plaintext and refresh under the new epoch.
+                        keys.retire(old.key_handle())?;
+                    }
                     vaults.bind(peer.peer_id, request.vault_id)?;
                     keys.block_live_traffic(peer.peer_id, TRANSPORT_GATE)?;
                     Ok((vault, request.vault_id))
@@ -489,16 +533,14 @@ where
                 let (vault, vault_id) = match admit {
                     Ok(value) => value,
                     Err(error) => {
-                        let denial = send_control(
+                        let denial = send_control_for_session(
                             &mut stream,
                             &keys,
-                            peer.peer_id,
+                            &selected,
                             &NetControl::AdmissionDenied,
                         )
                         .await;
-                        if !progress.had_pair {
-                            keys.discard_pair(peer.peer_id)?;
-                        }
+                        discard_rejected_candidate(&keys, &selected, progress.had_pair)?;
                         denial?;
                         return Err(error);
                     }
@@ -512,6 +554,7 @@ where
                 Ok((peer.peer_id, vault, permit))
             })
             .await;
+            drop(handshake_permit);
             drop(provisional);
             let result = match admission {
                 Ok(Ok((peer, vault, permit))) => {
@@ -547,6 +590,23 @@ where
     }
 }
 
+fn discard_rejected_candidate(
+    keys: &KeyStore,
+    session: &PairSession,
+    had_pair: bool,
+) -> Result<()> {
+    if keys
+        .candidate_session(session.peer_id)
+        .is_ok_and(|s| s.epoch == session.epoch)
+    {
+        keys.discard_candidate(session.peer_id)
+    } else if !had_pair {
+        keys.discard_pair(session.peer_id)
+    } else {
+        Ok(())
+    }
+}
+
 async fn read_after_ack(stream: &mut TcpStream, epoch: crate::ids::Epoch) -> Result<Frame> {
     loop {
         let frame = read_frame(stream).await?;
@@ -566,7 +626,17 @@ async fn send_control(
     peer: PeerId,
     control: &NetControl,
 ) -> Result<()> {
-    let packet = session::seal_packet(keys, peer, &encoding::encode_net_control(control)?)?;
+    send_control_for_session(stream, keys, &keys.current_session(peer)?, control).await
+}
+
+async fn send_control_for_session(
+    stream: &mut TcpStream,
+    keys: &KeyStore,
+    selected: &PairSession,
+    control: &NetControl,
+) -> Result<()> {
+    let packet =
+        session::seal_packet_with_session(keys, selected, &encoding::encode_net_control(control)?)?;
     send_frame(
         stream,
         &Frame::new(
@@ -577,12 +647,20 @@ async fn send_control(
     .await
 }
 async fn read_control(stream: &mut TcpStream, keys: &KeyStore, peer: PeerId) -> Result<NetControl> {
-    let received = read_after_ack(stream, keys.current_session(peer)?.epoch).await?;
+    read_control_for_session(stream, keys, &keys.current_session(peer)?).await
+}
+
+async fn read_control_for_session(
+    stream: &mut TcpStream,
+    keys: &KeyStore,
+    selected: &PairSession,
+) -> Result<NetControl> {
+    let received = read_after_ack(stream, selected.epoch).await?;
     if received.kind != frame::GCM_PACKET_KIND {
         return Err(Error::State("expected encrypted control"));
     }
     let packet = encoding::decode_control_packet(&received.payload)?;
-    encoding::decode_net_control(&session::open_packet(keys, peer, &packet)?)
+    encoding::decode_net_control(&session::open_packet_with_session(keys, selected, &packet)?)
 }
 
 async fn flush_to_peer(
@@ -607,6 +685,7 @@ async fn flush_to_peer(
                 challenge: challenge.clone(),
                 frame_count: count,
                 historical,
+                bootstrap_through: state.host.bootstrap_through(peer),
             },
             challenge,
         )
@@ -632,10 +711,16 @@ async fn flush_to_peer(
         .borrow_mut()
         .host
         .prepare_flush(peer, &challenge, &sig.payload)?;
-    if prepared.envelopes().len() != offer.frame_count as usize {
+    if prepared.envelopes().len() != offer.frame_count as usize
+        || prepared.bootstrap_through() != offer.bootstrap_through
+    {
         return Err(Error::State("mailbox changed during challenge"));
     }
-    let digest = encoding::flush_transport_digest(prepared.envelopes(), &offer.historical)?;
+    let digest = encoding::flush_transport_digest_with_bootstrap(
+        prepared.envelopes(),
+        &offer.historical,
+        offer.bootstrap_through,
+    )?;
     for envelope in prepared.envelopes() {
         send_frame(stream, &body_frame(envelope)?).await?;
     }
@@ -735,12 +820,22 @@ pub async fn join_host(
     // Authenticity and numeric target validation precede any connection attempt.
     ad.verify(unix_time()?)?;
     let mut progress = HandshakeProgress::default();
+    let mut had_admitted_pair = false;
     let result = tokio::time::timeout(HANDSHAKE_DEADLINE, async {
         let mut stream = TcpStream::connect(ad.addr).await?;
-        session::establish(&mut stream, &keys, Some(ad), &mut progress).await?;
+        let established =
+            session::establish_guarded(&mut stream, &keys, Some(ad), &mut progress, |peer| {
+                had_admitted_pair = keys.has_admitted_pair(peer)?;
+                Ok(had_admitted_pair)
+            })
+            .await?;
+        let selected = established.session;
         let request = JoinRequest::sign(&keys, ad.vault_id, code)?;
-        let packet =
-            session::seal_packet(&keys, ad.peer_id, &encoding::encode_join_request(&request)?)?;
+        let packet = session::seal_packet_with_session(
+            &keys,
+            &selected,
+            &encoding::encode_join_request(&request)?,
+        )?;
         send_frame(
             &mut stream,
             &Frame::new(
@@ -749,20 +844,21 @@ pub async fn join_host(
             )?,
         )
         .await?;
-        let offer = read_after_ack(&mut stream, keys.current_session(ad.peer_id)?.epoch).await?;
+        let offer = read_after_ack(&mut stream, selected.epoch).await?;
         if offer.kind == frame::GCM_PACKET_KIND {
             let packet = encoding::decode_control_packet(&offer.payload)?;
-            let plaintext = session::open_packet(&keys, ad.peer_id, &packet)?;
+            let plaintext = session::open_packet_with_session(&keys, &selected, &packet)?;
             return match encoding::decode_net_control(&plaintext)? {
-                NetControl::JoinRejected { bound, requested } => Err(Error::VaultSessionConflict {
-                    peer_id: keys.peer_id()?,
-                    bound,
-                    requested,
-                }),
+                NetControl::JoinRejected { bound, requested } => {
+                    discard_rejected_candidate(&keys, &selected, had_admitted_pair)?;
+                    Err(Error::VaultSessionConflict {
+                        peer_id: keys.peer_id()?,
+                        bound,
+                        requested,
+                    })
+                }
                 NetControl::AdmissionDenied => {
-                    if !progress.had_pair {
-                        keys.discard_pair(ad.peer_id)?;
-                    }
+                    discard_rejected_candidate(&keys, &selected, had_admitted_pair)?;
                     Err(Error::AuthenticationFailed)
                 }
                 _ => Err(Error::AuthenticationFailed),
@@ -771,10 +867,14 @@ pub async fn join_host(
         if offer.kind != frame::FLUSH_CHALLENGE_KIND {
             return Err(Error::State("expected flush challenge after Join"));
         }
-        Ok((stream, encoding::decode_flush_offer(&offer.payload)?))
+        Ok((
+            stream,
+            encoding::decode_flush_offer(&offer.payload)?,
+            selected,
+        ))
     })
     .await;
-    let (mut stream, offer) = match result {
+    let (mut stream, offer, selected) = match result {
         Ok(Ok(value)) => value,
         failure => {
             return match failure {
@@ -799,7 +899,7 @@ pub async fn join_host(
         )?)),
     };
     keys.block_live_traffic(ad.peer_id, TRANSPORT_GATE)?;
-    receive_flush(&mut stream, &keys, ad.peer_id, &replica, offer).await?;
+    receive_flush(&mut stream, &keys, &selected, &replica, offer).await?;
     let welcome = tokio::time::timeout(IDLE_TIMEOUT, read_control(&mut stream, &keys, ad.peer_id))
         .await
         .map_err(|_| Error::State("welcome timeout"))??;
@@ -821,6 +921,7 @@ pub async fn join_host(
         _ => return Err(Error::AuthenticationFailed),
     }
     keys.unblock_live_traffic(ad.peer_id, TRANSPORT_GATE)?;
+    keys.mark_admitted(ad.peer_id)?;
     replica.borrow_mut().finish_receipts();
     Ok(JoinedPeer {
         stream,
@@ -861,10 +962,11 @@ fn import_current_identities(
 async fn receive_flush(
     stream: &mut TcpStream,
     keys: &KeyStore,
-    peer: PeerId,
+    selected: &PairSession,
     replica: &Rc<RefCell<MemberReplica>>,
     offer: FlushOffer,
 ) -> Result<()> {
+    let peer = selected.peer_id;
     if offer.frame_count > MAX_DRAIN_FRAMES {
         return Err(Error::InvalidInput("mailbox frame budget exceeded"));
     }
@@ -877,12 +979,9 @@ async fn receive_flush(
     let mut envelopes = Vec::new();
     let mut bytes = 0usize;
     for _ in 0..offer.frame_count {
-        let received = tokio::time::timeout(
-            IDLE_TIMEOUT,
-            read_after_ack(stream, keys.current_session(peer)?.epoch),
-        )
-        .await
-        .map_err(|_| Error::State("mailbox idle timeout"))??;
+        let received = tokio::time::timeout(IDLE_TIMEOUT, read_after_ack(stream, selected.epoch))
+            .await
+            .map_err(|_| Error::State("mailbox idle timeout"))??;
         bytes = bytes
             .checked_add(received.payload.len())
             .ok_or(Error::InvalidInput("mailbox size overflow"))?;
@@ -893,15 +992,35 @@ async fn receive_flush(
     }
     // Open every old counter in FIFO order into existing staging BEFORE the
     // newer authenticated end marker can advance the Packet replay window.
-    let prepared = replica
-        .borrow_mut()
-        .prepare_mailbox_with_history(&envelopes, &offer.historical)?;
-    let digest = encoding::flush_transport_digest(&envelopes, &offer.historical)?;
-    let end = tokio::time::timeout(IDLE_TIMEOUT, read_control(stream, keys, peer))
-        .await
-        .map_err(|_| Error::State("mailbox end timeout"))??;
+    let prepared = replica.borrow_mut().prepare_mailbox_for_session(
+        &envelopes,
+        &offer.historical,
+        offer.bootstrap_through,
+        selected,
+    )?;
+    let digest = encoding::flush_transport_digest_with_bootstrap(
+        &envelopes,
+        &offer.historical,
+        offer.bootstrap_through,
+    )?;
+    let end = tokio::time::timeout(
+        IDLE_TIMEOUT,
+        read_control_for_session(stream, keys, selected),
+    )
+    .await
+    .map_err(|_| Error::State("mailbox end timeout"))??;
     if end != (NetControl::FlushEnd { digest }) {
         return Err(Error::AuthenticationFailed);
+    }
+    // An unauthenticated FlushOffer cannot replace an admitted session. The
+    // complete encrypted end marker authenticates H's accepted admission/batch.
+    if keys
+        .candidate_session(peer)
+        .is_ok_and(|s| s.epoch == selected.epoch)
+    {
+        let old = keys.current_session(peer)?;
+        keys.promote_candidate(peer, selected.epoch)?;
+        keys.retire(old.key_handle())?;
     }
     replica.borrow_mut().commit_prepared(prepared)?;
     send_control(stream, keys, peer, &NetControl::FlushApplied { digest }).await?;

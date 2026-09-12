@@ -7,6 +7,7 @@ impl HostState {
         metadata.denied = self.denied.clone();
         metadata.historical_members = self.historical_members.clone();
         metadata.identity_documents = self.identity_documents.clone();
+        metadata.bootstrap_through = self.bootstrap_through.clone();
         metadata.admission = self.admission.clone();
         metadata.dirents = self.tree.dirents();
         metadata.manifests = self
@@ -34,6 +35,7 @@ impl HostState {
                 continue;
             }
             let ack = self.acked_through.get(&peer).copied().unwrap_or(0);
+            let covered = ack.max(self.bootstrap_through.get(&peer).copied().unwrap_or(0));
             let queue = metadata.mailboxes.entry(peer).or_default();
             let known: BTreeSet<_> = queue
                 .iter()
@@ -45,7 +47,7 @@ impl HostState {
             let missing: Vec<_> = self
                 .log
                 .iter()
-                .filter(|record| record.id > ack && !known.contains(&record.id))
+                .filter(|record| record.id > covered && !known.contains(&record.id))
                 .cloned()
                 .map(QueueContent::Control)
                 .collect();
@@ -128,6 +130,7 @@ impl HostService {
                 denied: metadata.denied,
                 historical_members: metadata.historical_members,
                 identity_documents: metadata.identity_documents,
+                bootstrap_through: metadata.bootstrap_through,
                 admission: metadata.admission,
                 chunks: Arc::new(Mutex::new(chunks)),
                 manifests,
@@ -302,6 +305,7 @@ impl MemberReplica {
         let manifests = verified_manifests(&keys, &metadata)?;
         let tree = DirectoryTree::from_dirents(expected_root, metadata.dirents.clone())?;
         let last_applied = metadata.acked_through.get(&local).copied().unwrap_or(0);
+        let bootstrap_through = metadata.bootstrap_through.get(&local).copied().unwrap_or(0);
         let mut replica = Self {
             keys,
             host_id,
@@ -322,6 +326,7 @@ impl MemberReplica {
             expected_root,
             tree,
             last_applied,
+            bootstrap_through,
         };
         if fresh {
             let staged = replica.stage()?;
@@ -343,10 +348,16 @@ impl MemberReplica {
             .map(|(&id, trusted)| (id, trusted.manifest().clone()))
             .collect();
         metadata.log = staged.log.clone();
+        if staged.bootstrap_through != 0 {
+            metadata
+                .bootstrap_through
+                .insert(self.keys.peer_id()?, staged.bootstrap_through);
+        }
         let last = staged
             .log
             .last()
-            .map_or(self.last_applied, |record| record.id);
+            .map_or(self.last_applied, |record| record.id)
+            .max(staged.bootstrap_through);
         metadata.next_control = last
             .checked_add(1)
             .ok_or(Error::State("instruction ids exhausted"))?;

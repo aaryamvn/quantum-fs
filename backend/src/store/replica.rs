@@ -26,6 +26,9 @@ pub struct ReplicaMetadata {
     pub admission: Option<VaultMetadata>,
     pub historical_members: BTreeSet<PeerId>,
     pub identity_documents: BTreeMap<PeerId, IdentityDocument>,
+    /// A recipient-specific synthetic snapshot covers controls through this id
+    /// while its real acknowledgement remains unchanged.
+    pub bootstrap_through: BTreeMap<PeerId, u64>,
 }
 
 impl ReplicaMetadata {
@@ -44,6 +47,7 @@ impl ReplicaMetadata {
             admission: None,
             historical_members: BTreeSet::new(),
             identity_documents: BTreeMap::new(),
+            bootstrap_through: BTreeMap::new(),
         }
     }
 
@@ -106,5 +110,26 @@ mod tests {
         metadata.truncate_log();
         assert_eq!(metadata.log.len(), 1);
         assert_eq!(metadata.log[0].id, 3);
+    }
+
+    #[test]
+    fn bootstrap_coverage_is_not_an_acknowledgement() {
+        let host = PeerId([1; 32]);
+        let joining = PeerId([2; 32]);
+        let mut metadata = ReplicaMetadata::new(FileId([0; 32]));
+        metadata.members.extend([host, joining]);
+        metadata.log = (1..=2)
+            .map(|id| ControlRecord {
+                id,
+                update: ControlUpdate::Add(FileId([id as u8; 32])),
+            })
+            .collect();
+        metadata.acked_through.insert(host, 2);
+        metadata.bootstrap_through.insert(joining, 2);
+
+        metadata.truncate_log();
+
+        assert_eq!(metadata.log.len(), 2);
+        assert_eq!(metadata.acked_through.get(&joining), None);
     }
 }

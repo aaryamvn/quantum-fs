@@ -156,6 +156,64 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
+### Cross-VM validation
+
+`examples/vm_probe.rs` is a test driver for the existing host/member APIs. It
+does not add a daemon command protocol. `scripts/vm_validate.py` runs actual
+`qfsd` processes and API probes across three existing Lima guests named
+`qfs-host`, `qfs-a`, and `qfs-b`, using their generated SSH configurations.
+Use Lima's [user-v2 network](https://lima-vm.io/docs/config/network/user-v2/)
+for guest-to-guest traffic; `vzNAT` alone did not permit it on the test Mac.
+Each guest needs native Linux binaries built with:
+
+```sh
+cargo build --locked --release --bin qfsd --example vm_probe
+```
+
+The prepared VMs on this computer have both binaries in
+`/home/justinschwartzreich.guest/qfs-tools`, with independent guest disks and
+no shared host folders. They are left powered off. Start them, then run from
+`backend/`:
+
+```sh
+for QFS_VM in qfs-host qfs-a qfs-b; do
+  env LIMA_HOME=/private/tmp/qfs-vm-validation/lima \
+    /private/tmp/qfs-vm-validation/runtime/bin/limactl start "$QFS_VM" --tty=false
+done
+python3 scripts/vm_validate.py \
+  --lima-home /private/tmp/qfs-vm-validation/lima \
+  --host-ip 192.168.104.1 --a-ip 192.168.104.3 --b-ip 192.168.104.4 \
+  --bin-dir /home/justinschwartzreich.guest/qfs-tools \
+  --output /private/tmp/qfs-vm-validation/results.json
+python3 scripts/vm_network_validate.py \
+  --lima-home /private/tmp/qfs-vm-validation/lima \
+  --host-ip 192.168.104.1 --interface eth0 \
+  --bin-dir /home/justinschwartzreich.guest/qfs-tools \
+  --output /private/tmp/qfs-vm-validation/network-results.json
+```
+
+Run the scripts sequentially: the network test temporarily adds delay/loss and
+a port-specific partition inside the disposable member VM. Both scripts emit
+JSON results and process logs, stop their tracked processes, and return nonzero
+on failures. Network settings installed by the network test are removed afterward.
+IP addresses and guest paths are configurable; inspect them after reprovisioning.
+
+Member-only restart negotiates a candidate epoch while H preserves its confirmed
+pair until admission succeeds. Rejected candidates cannot replace that pair;
+ambiguous disconnects retain the exact cached wrap and counters for retry.
+Fresh members receive the current tree, accepted manifests and plaintext chunks
+through the encrypted mailbox even after H truncates the old instruction log.
+Durable bootstrap coverage is separate from acknowledgment; interrupted transfers
+publish no partial replica and can retry after either process restarts. Initial
+snapshot admission is bounded by the existing 100,000-frame/64 MiB drain budget.
+
+The daemon has no filesystem IPC yet, online bodies require explicit pull,
+and automatic member-to-member connection/fallback orchestration remains unwired.
+
+The 2026-09-12 VM rerun passed 18 transfer/restart/membership scenarios and
+11 malformed-frame/network-fault checks. The Rust suite passed 182 tests on
+macOS and Linux; both builds and `cargo clippy --all-targets -- -D warnings` passed.
+
 Tests cover unsigned peer ordering, SHA-256 identity/chunk vectors, canonical
 encodings and signing payloads, real KEM/signature/AEAD round trips, identity
 tampering, context separation, wrap retries and epoch collisions, restart/key

@@ -1,4 +1,11 @@
-use std::{cell::RefCell, fs, net::Ipv4Addr, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell,
+    fs,
+    net::Ipv4Addr,
+    path::PathBuf,
+    rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use quantam_fs::{
     encoding,
@@ -70,11 +77,14 @@ enum HistoryTamper {
 
 struct TestDir(PathBuf);
 
+static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
 impl TestDir {
     fn new() -> Result<Self> {
         let path = std::env::temp_dir().join(format!(
-            "qfs-net-history-flush-{}-{}",
+            "qfs-net-history-flush-{}-{}-{}",
             std::process::id(),
+            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|_| Error::State("test clock"))?
