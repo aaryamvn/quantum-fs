@@ -8,7 +8,13 @@ async fn main() -> ExitCode {
     match daemon::run(Config::parse()).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("qfsd: {error}");
+            quantam_fs::demo_log::event(
+                quantam_fs::demo_log::Kind::Warning,
+                "LOCAL",
+                "qfsd: daemon stopped with an error",
+                &[format!("reason  {error}")],
+            );
+            quantam_fs::demo_log::flush();
             ExitCode::FAILURE
         }
     }

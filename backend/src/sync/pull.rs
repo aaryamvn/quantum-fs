@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, future::Future, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    time::Duration,
+};
 
 use crate::{
     crypto::{
@@ -230,7 +234,7 @@ impl InProcessPullCoordinator {
                     continue;
                 }
                 staged_ids.insert(expected);
-                staged.push((body.file_id, body.index, plaintext));
+                staged.push((body.file_id, body.index, plaintext, body.header.sender_id));
             }
         }
 
@@ -240,7 +244,8 @@ impl InProcessPullCoordinator {
             .map_err(|_| Error::State("chunk store lock poisoned"))?;
         let mut next = chunks.clone();
         let mut count = 0;
-        for (file_id, index, plaintext) in staged {
+        let mut sources: BTreeMap<PeerId, (usize, usize)> = BTreeMap::new();
+        for (file_id, index, plaintext, sender) in staged {
             let chunk_id = encoding::chunk_id(&file_id, index, &plaintext);
             // Control apply and pull acceptance synchronize on this store lock.
             // Re-check the current manifest at the final mutation boundary so an
@@ -249,6 +254,9 @@ impl InProcessPullCoordinator {
                 continue;
             }
             if !next.has(&chunk_id) {
+                let source = sources.entry(sender).or_default();
+                source.0 += 1;
+                source.1 += plaintext.len();
                 next.put(&file_id, index, plaintext)?;
                 count += 1;
             }
@@ -256,6 +264,24 @@ impl InProcessPullCoordinator {
         if count != 0 {
             next.persist_current()?;
             *chunks = next;
+            let manifest = trusted_manifest.manifest();
+            let available = manifest
+                .chunk_ids
+                .iter()
+                .filter(|id| chunks.has(id))
+                .count();
+            // The observation is after persistence and never changes protocol
+            // success. Do not turn a telemetry identity lookup into an error.
+            if let Ok(requester) = self.keys.peer_id() {
+                crate::demo_log::transfer(
+                    requester,
+                    manifest.file_id,
+                    manifest.version,
+                    manifest.chunk_ids.len(),
+                    available,
+                    sources,
+                );
+            }
         }
         Ok(count)
     }

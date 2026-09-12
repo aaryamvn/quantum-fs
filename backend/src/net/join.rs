@@ -4,6 +4,7 @@ use crate::{
         identity::IdentityDocument,
         sign::{PureMlDsa, RustCryptoPureMlDsa, JOIN_CONTEXT, MANIFEST_CONTEXT},
     },
+    demo_log::{self, Kind},
     encoding,
     keystore::KeyStore,
     Error, Result,
@@ -369,6 +370,12 @@ impl Drop for PeerPermit {
         if self.vault.borrow().keys.current_session(self.peer).is_err() {
             self.vaults.unbind(self.peer, self.vault_id);
         }
+        demo_log::event(
+            Kind::Membership,
+            "AES-256-GCM",
+            "Vault member disconnected",
+            &[format!("peer  {}", demo_log::peer(self.peer))],
+        );
     }
 }
 
@@ -515,7 +522,12 @@ where
                         send_control(&mut stream, &keys, peer, &welcome).await?;
                         keys.unblock_live_traffic(peer, TRANSPORT_GATE)?;
                         vault.borrow_mut().host.heartbeat(peer, IDLE_TIMEOUT)?;
-                        eprintln!("qfsd: accepted vault member; pair live");
+                        demo_log::event(
+                            Kind::Membership,
+                            "X-Wing + ML-DSA-65",
+                            "qfsd: accepted vault member; pair live",
+                            &[format!("peer  {}", demo_log::peer(peer))],
+                        );
                         serve_live(&mut stream, &vault, peer).await
                     }
                     .await
@@ -524,7 +536,12 @@ where
                 Err(_) => Err(Error::State("handshake deadline exceeded")),
             };
             if let Err(error) = result {
-                eprintln!("qfsd: peer connection closed: {error}");
+                demo_log::event(
+                    Kind::Warning,
+                    "TCP",
+                    "qfsd: peer connection closed",
+                    &[format!("reason  {error}")],
+                );
             }
         });
     }
@@ -895,6 +912,17 @@ async fn receive_flush(
     {
         return Err(Error::AuthenticationFailed);
     }
+    if offer.frame_count != 0 {
+        demo_log::event(
+            Kind::Sync,
+            "ML-DSA-65 + AES-256-GCM",
+            "Offline mailbox recovered",
+            &[
+                format!("host    {}", demo_log::peer(peer)),
+                format!("applied  {} authenticated frame(s)", offer.frame_count),
+            ],
+        );
+    }
     Ok(())
 }
 
@@ -982,6 +1010,7 @@ async fn serve_live(
                         InProcessPullCoordinator::new(keys.clone(), vault.borrow().host.chunks());
                     let responses = pull.serve(&request, peer)?;
                     send_member_state(stream, vault, &keys, peer).await?;
+                    let sent = responses.len();
                     for response in responses {
                         send_frame(
                             stream,
@@ -993,6 +1022,20 @@ async fn serve_live(
                         .await?;
                     }
                     send_control(stream, &keys, peer, &NetControl::Heartbeat).await?;
+                    if sent != 0 {
+                        demo_log::event(
+                            Kind::Transfer,
+                            "AES-256-GCM",
+                            "Encrypted file pieces sent",
+                            &[
+                                format!("recipient  {}", demo_log::peer(peer)),
+                                format!(
+                                    "pieces     {sent}/{} requested",
+                                    request.chunk_ids().len()
+                                ),
+                            ],
+                        );
+                    }
                     continue;
                 }
                 let record = encoding::decode_control_record(&plaintext)?;
@@ -1081,6 +1124,7 @@ fn receive_member_control(
                 return Err(Error::State("file upload is incomplete"));
             }
             vault.borrow_mut().host.fan_out_control(peer, &update)?;
+            log_remote_control(peer, &update);
         }
     }
     Ok(())
@@ -1123,12 +1167,74 @@ fn finalize_upload(
         *upload = Some(completed);
         return Err(Error::State("file upload is incomplete"));
     }
+    let file_id = completed.trusted.manifest().file_id;
+    let chunks = completed.trusted.manifest().chunk_ids.len();
+    let bytes = completed.trusted.manifest().size;
+    let linked_as = link.as_ref().and_then(|update| match update {
+        ControlUpdate::Link { name, .. } => Some(name.clone()),
+        _ => None,
+    });
     vault.borrow_mut().host.commit_writer_upload(
         peer,
         completed.trusted.manifest().clone(),
         completed.bodies,
         link,
-    )
+    )?;
+    let mut details = vec![
+        format!("file    {}", demo_log::file(file_id)),
+        format!("writer  {} · signature verified", demo_log::peer(peer)),
+        format!("pieces  {chunks} · {bytes} bytes committed"),
+    ];
+    if let Some(name) = linked_as {
+        details.push(format!("linked  {name}"));
+    }
+    demo_log::event(
+        Kind::File,
+        "ML-DSA-65 + AES-256-GCM",
+        "Remote file committed",
+        &details,
+    );
+    Ok(())
+}
+
+fn log_remote_control(peer: PeerId, update: &ControlUpdate) {
+    let (headline, mut details) = match update {
+        ControlUpdate::Link {
+            parent,
+            name,
+            child,
+            is_dir,
+        } => (
+            if *is_dir {
+                format!("Remote directory committed  {name}")
+            } else {
+                format!("Remote file linked  {name}")
+            },
+            vec![
+                format!("parent  {}", demo_log::file(*parent)),
+                format!("inode   {}", demo_log::file(*child)),
+            ],
+        ),
+        ControlUpdate::Unlink { parent, name } => (
+            format!("Remote path unlinked  {name}"),
+            vec![format!("parent  {}", demo_log::file(*parent))],
+        ),
+        ControlUpdate::Rename {
+            src_parent,
+            src_name,
+            dst_parent,
+            dst_name,
+        } => (
+            format!("Remote path renamed  {src_name} → {dst_name}"),
+            vec![
+                format!("from  {}", demo_log::file(*src_parent)),
+                format!("to    {}", demo_log::file(*dst_parent)),
+            ],
+        ),
+        _ => return,
+    };
+    details.push(format!("writer  {}", demo_log::peer(peer)));
+    demo_log::event(Kind::File, "AES-256-GCM", headline, &details);
 }
 
 async fn send_pending_controls(
@@ -1168,6 +1274,10 @@ async fn send_member_state(
 }
 
 impl JoinedPeer {
+    pub(crate) fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
     pub async fn have_query(&mut self, query: &HaveQuery) -> Result<HaveReply> {
         self.keys.require_live_traffic(self.peer_id)?;
         let packet = session::seal_packet(

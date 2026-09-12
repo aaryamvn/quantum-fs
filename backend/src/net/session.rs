@@ -7,6 +7,7 @@ use crate::{
         sign::{PureMlDsa, RustCryptoPureMlDsa, WRAP_CONTEXT},
         wrap::{ConstructionBWrap, PairSession, RustCryptoConstructionBWrap, WrapMessage},
     },
+    demo_log::{self, Kind},
     encoding,
     ids::{Epoch, PeerId},
     keystore::{IdentityKeyStore, KeyStore},
@@ -161,6 +162,7 @@ async fn finish_preserved(
         }
     }
     progress.wrap_acknowledged = true;
+    log_established(peer, session.epoch);
     Ok(EstablishedSession {
         peer: peer.clone(),
         session,
@@ -225,6 +227,7 @@ async fn finish_wrap(
                         } else {
                             send_ack(stream, session.epoch, false).await?;
                             progress.wrap_acknowledged = true;
+                            log_established(peer, session.epoch);
                             return Ok(EstablishedSession {
                                 peer: peer.clone(),
                                 session,
@@ -247,6 +250,7 @@ async fn finish_wrap(
                     return Err(Error::State("WrapAck epoch does not match active session"));
                 }
                 progress.wrap_acknowledged = true;
+                log_established(peer, session.epoch);
                 return Ok(EstablishedSession {
                     peer: peer.clone(),
                     session,
@@ -255,6 +259,18 @@ async fn finish_wrap(
             _ => return Err(Error::State("unexpected frame during pair handshake")),
         }
     }
+}
+
+fn log_established(peer: &IdentityDocument, epoch: Epoch) {
+    demo_log::event(
+        Kind::Security,
+        "X-Wing + ML-DSA-65",
+        "Encrypted peer session established",
+        &[
+            format!("peer   {}", demo_log::peer(peer.peer_id)),
+            format!("epoch  {} · AES-256-GCM transport", epoch.0),
+        ],
+    );
 }
 
 fn prepare_incoming_floor(

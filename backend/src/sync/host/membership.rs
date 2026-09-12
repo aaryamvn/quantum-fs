@@ -1,4 +1,5 @@
 use super::*;
+use crate::demo_log::{self, Kind};
 
 impl HostService {
     /// Admission is part of the same staged snapshot as membership. On legacy
@@ -64,6 +65,15 @@ impl HostService {
         self.challenges.remove(&target);
         self.disconnects.push(target);
         self.keys.discard_pair(target)?;
+        demo_log::event(
+            Kind::Membership,
+            "ML-DSA-65 + AES-256-GCM",
+            format!("member revoked  {}", demo_log::peer(target)),
+            &[
+                "membership snapshot committed".to_owned(),
+                "pair key discarded · join code rotated".to_owned(),
+            ],
+        );
         Ok(target)
     }
 

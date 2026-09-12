@@ -17,6 +17,7 @@ use crate::{
         identity::IdentityDocument,
         sign::{PureMlDsa, RustCryptoPureMlDsa, FLUSH_CONTEXT},
     },
+    demo_log::{self, Kind},
     encoding::{self, MailboxFrame},
     ids::{ChunkId, Epoch, FileId, PeerId, Seq},
     keystore::{random_bytes, IdentityKeyStore, KeyStore},
@@ -903,6 +904,17 @@ impl HostService {
         recipient
             .keys
             .unblock_live_traffic(self.state.host_id, self.state.gate_owner)?;
+        if report.controls != 0 || report.chunks_written != 0 {
+            demo_log::event(
+                Kind::Sync,
+                "ML-DSA-65 + AES-256-GCM",
+                format!("offline mailbox restored  {}", demo_log::peer(peer)),
+                &[
+                    format!("{} authenticated control(s)", report.controls),
+                    format!("{} encrypted chunk body(s) written", report.chunks_written),
+                ],
+            );
+        }
         Ok(report)
     }
 }

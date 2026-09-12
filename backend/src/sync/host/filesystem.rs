@@ -1,5 +1,51 @@
 use super::*;
 use crate::crypto::sign::MANIFEST_CONTEXT;
+use crate::demo_log::{self, Kind};
+
+fn delivery_details(
+    host: &HostService,
+    since_control: u64,
+    file_id: Option<FileId>,
+) -> Vec<String> {
+    let online = host
+        .state
+        .online
+        .iter()
+        .filter(|(_, pending)| pending.iter().any(|entry| entry.record.id >= since_control))
+        .map(|(&peer, _)| demo_log::peer(peer))
+        .collect::<Vec<_>>();
+    let queued = host
+        .state
+        .mailboxes
+        .iter()
+        .filter_map(|(&peer, pending)| {
+            let count = pending
+                .iter()
+                .filter(|entry| match &entry.content {
+                    QueueContent::Control(record) => record.id >= since_control,
+                    QueueContent::Chunk {
+                        file_id: queued, ..
+                    } => Some(*queued) == file_id,
+                })
+                .count();
+            (count != 0).then(|| format!("{} — {count} encrypted item(s)", demo_log::peer(peer)))
+        })
+        .collect::<Vec<_>>();
+    let mut details = Vec::new();
+    if !online.is_empty() {
+        details.push(format!("live notify → {}", online.join(", ")));
+    }
+    if !queued.is_empty() {
+        details.push(format!("offline queue → {}", queued.join(", ")));
+    }
+    details
+}
+
+fn filesystem_details(host: &HostService, since_control: u64, sender: PeerId) -> Vec<String> {
+    let mut details = vec![format!("authorized member {}", demo_log::peer(sender))];
+    details.extend(delivery_details(host, since_control, None));
+    details
+}
 
 pub(super) fn validate_link_kind(
     manifests: &BTreeMap<FileId, TrustedManifest>,
@@ -68,6 +114,7 @@ impl HostService {
         self.require_member(sender)?;
         let (parent, name) = self.state.tree.resolve_parent(path)?;
         let child = FileId(random_bytes()?);
+        let since_control = self.state.next_control;
         self.fan_out_control(
             sender,
             &ControlUpdate::Link {
@@ -77,6 +124,12 @@ impl HostService {
                 is_dir: true,
             },
         )?;
+        demo_log::event(
+            Kind::File,
+            "AES-256-GCM",
+            format!("directory committed  {path}"),
+            &filesystem_details(self, since_control, sender),
+        );
         Ok(child)
     }
 
@@ -99,7 +152,15 @@ impl HostService {
         self.require_running()?;
         self.require_member(sender)?;
         let (parent, name) = self.state.tree.resolve_parent(path)?;
-        self.fan_out_control(sender, &ControlUpdate::Unlink { parent, name })
+        let since_control = self.state.next_control;
+        self.fan_out_control(sender, &ControlUpdate::Unlink { parent, name })?;
+        demo_log::event(
+            Kind::File,
+            "AES-256-GCM",
+            format!("path unlinked  {path}"),
+            &filesystem_details(self, since_control, sender),
+        );
+        Ok(())
     }
 
     pub fn rename(&mut self, sender: PeerId, source: &str, destination: &str) -> Result<()> {
@@ -107,6 +168,7 @@ impl HostService {
         self.require_member(sender)?;
         let (src_parent, src_name) = self.state.tree.resolve_parent(source)?;
         let (dst_parent, dst_name) = self.state.tree.resolve_parent(destination)?;
+        let since_control = self.state.next_control;
         self.fan_out_control(
             sender,
             &ControlUpdate::Rename {
@@ -115,7 +177,14 @@ impl HostService {
                 dst_parent,
                 dst_name,
             },
-        )
+        )?;
+        demo_log::event(
+            Kind::File,
+            "AES-256-GCM",
+            format!("path renamed  {source} → {destination}"),
+            &filesystem_details(self, since_control, sender),
+        );
+        Ok(())
     }
 
     /// In-process writer-to-H API. TCP sends the same signed manifest and
@@ -180,6 +249,9 @@ impl HostService {
         } else {
             None
         };
+        let chunk_count = manifest.chunk_ids.len();
+        let byte_count = manifest.size;
+        let since_control = self.state.next_control;
         self.commit_writer_upload(
             sender,
             manifest,
@@ -190,6 +262,18 @@ impl HostService {
                 .collect(),
             link,
         )?;
+        let mut details = vec![
+            format!("file {}", demo_log::file(file_id)),
+            format!("{chunk_count} chunk(s) · {byte_count} bytes"),
+            format!("writer {} · signature verified", demo_log::peer(sender)),
+        ];
+        details.extend(delivery_details(self, since_control, Some(file_id)));
+        demo_log::event(
+            Kind::File,
+            "ML-DSA-65 + AES-256-GCM",
+            format!("file committed  {path}"),
+            &details,
+        );
         Ok(file_id)
     }
 

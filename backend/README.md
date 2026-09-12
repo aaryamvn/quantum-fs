@@ -45,6 +45,43 @@ at the newly bound address; adding `--create-vault` creates one more vault.
 
 Successful admission logs `accepted vault member; pair live` on H and
 `joined vault` on the member. Ctrl-C or SIGTERM shuts down gracefully.
+
+### Demo terminal
+
+Every `qfsd` startup, including directory mode and existing-vault restarts,
+automatically displays the color-coded demo log in its launching terminal.
+No debug flag or environment opt-in is required. Events cover verified peer
+sessions, signed directory routes, file changes, encrypted piece delivery,
+file availability with per-source piece counts, offline recovery, revocation,
+and cache eviction. Heartbeats and have queries produce no log events.
+Labels name the algorithms actually used; partial pulls never claim a complete file.
+
+Display updates group activity every 750 ms, show up to four event blocks plus a
+burst summary, and never delay protocol processing to pace the display. Each
+process also appends complete event blocks to `--data-dir/demo-events.log`.
+Colors follow the terminal automatically; `FORCE_COLOR=1` forces ANSI and
+`NO_COLOR=1` requests plain text. Timestamps use UTC; peer/file labels show
+the first 12 hexadecimal digits of their public identifiers.
+
+For one corner terminal showing all VMs, run the included Python 3 monitor:
+
+```sh
+python3 backend/demo_monitor.py \
+  central=demo@192.168.64.2:/home/demo/.qfs-directory/demo-events.log \
+  vault=demo@192.168.64.3:/home/demo/.qfs-host/demo-events.log \
+  client1=demo@192.168.64.4:/home/demo/.qfs-member/demo-events.log
+```
+
+Replace the example SSH users, VM addresses, and absolute data paths; add two
+more `label=user@host:/path/demo-events.log` arguments for five sources. Local
+`label=/absolute/path/demo-events.log` arguments also work. SSH must already
+work noninteractively. The monitor keeps each event and its indented sources
+together, labels the originating VM, and summarizes bursts across all nodes.
+Server logs start automatically; this optional combined view is started once
+in the corner terminal. Ctrl-C stops only the monitor. No new network protocol
+or daemon port is introduced. Library-only client processes can enable the same
+events with `demo_log::start("VAULT CLIENT")` and `demo_log::set_log_file(path)`.
+
 The runtime is Tokio current-thread with `LocalSet` and `spawn_local`.
 The peer handshake deadline is five seconds, idle timeout is 30 seconds,
 and H permits 32 simultaneous provisional handshakes and 128 TCP connections.

@@ -24,6 +24,7 @@ use crate::{
         sign::{PureMlDsa, RustCryptoPureMlDsa, DIRECTORY_CONTEXT},
         wrap::validate_public_key,
     },
+    demo_log::{self, Kind},
     encoding,
     ids::PeerId,
     keystore::KeyStore,
@@ -399,8 +400,21 @@ impl DirectoryStore {
                 vk: ad.vk.clone(),
             },
         );
+        let peer_id = ad.peer_id;
+        let vault_id = ad.vault_id;
+        let addr = ad.addr;
         ads.insert(code, ad);
-        self.commit(ads, watermarks)
+        self.commit(ads, watermarks)?;
+        demo_log::event(
+            Kind::Discovery,
+            "ML-DSA-65",
+            "Signed vault route published",
+            &[
+                format!("host   {}", demo_log::peer(peer_id)),
+                format!("vault  {} · address {addr}", short_vault(vault_id)),
+            ],
+        );
+        Ok(())
     }
 
     pub fn lookup(&mut self, code: &JoinCode, now: u64) -> Result<Option<DirectoryAd>> {
@@ -410,7 +424,19 @@ impl DirectoryStore {
         if changed {
             self.commit(ads, watermarks)?;
         }
-        Ok(self.ads.get(code).cloned())
+        let resolved = self.ads.get(code).cloned();
+        if let Some(ad) = &resolved {
+            demo_log::event(
+                Kind::Discovery,
+                "ML-DSA-65",
+                "Verified vault route resolved",
+                &[
+                    format!("host   {}", demo_log::peer(ad.peer_id)),
+                    format!("vault  {} · address {}", short_vault(ad.vault_id), ad.addr),
+                ],
+            );
+        }
+        Ok(resolved)
     }
 
     pub fn forget(&mut self, request: DirForget, now: u64) -> Result<()> {
@@ -438,7 +464,17 @@ impl DirectoryStore {
                 vk,
             },
         );
-        self.commit(ads, watermarks)
+        self.commit(ads, watermarks)?;
+        demo_log::event(
+            Kind::Discovery,
+            "ML-DSA-65",
+            "Vault route retired",
+            &[
+                format!("host   {}", demo_log::peer(request.peer_id)),
+                format!("vault  {}", short_vault(request.vault_id)),
+            ],
+        );
+        Ok(())
     }
 
     fn pruned(
@@ -484,6 +520,11 @@ impl DirectoryStore {
         }
         Ok(())
     }
+}
+
+fn short_vault(vault_id: VaultId) -> String {
+    let encoded = vault_id.to_string();
+    encoded.chars().take(12).collect()
 }
 
 fn require_current(issued_at: u64, now: u64) -> Result<()> {

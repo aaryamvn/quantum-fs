@@ -3,6 +3,7 @@
 pub mod config;
 pub mod crypto;
 pub mod daemon;
+pub mod demo_log;
 pub mod encoding;
 pub mod error;
 pub mod ids;

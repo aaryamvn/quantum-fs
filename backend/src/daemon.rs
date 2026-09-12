@@ -8,6 +8,7 @@ use crate::{
         identity::IdentityManager,
         wrap::{RustCryptoConstructionBWrap, ROTATION_INTERVAL_SECS},
     },
+    demo_log::{self, Kind},
     ids::PeerId,
     keystore::{atomic_private_write, KeyStore},
     net::{
@@ -37,12 +38,30 @@ pub fn member_role(local_id: &PeerId, host_id: Option<&PeerId>) -> MemberRole {
 }
 
 pub async fn run(config: Config) -> Result<()> {
-    LocalSet::new().run_until(run_inner(config)).await
+    let role = if config.directory {
+        "CENTRAL DIRECTORY"
+    } else if config.join_code.is_some() {
+        "VAULT MEMBER"
+    } else {
+        "VAULT SERVER"
+    };
+    demo_log::start(role);
+    let result = LocalSet::new().run_until(run_inner(config)).await;
+    demo_log::flush();
+    result
 }
 
 async fn run_inner(config: Config) -> Result<()> {
     let mut shutdown = Shutdown::install()?;
     std::fs::create_dir_all(&config.data_dir)?;
+    if let Err(error) = demo_log::set_log_file(&config.data_dir.join("demo-events.log")) {
+        demo_log::event(
+            Kind::Warning,
+            "LOCAL",
+            "Demo log mirror unavailable",
+            &[format!("reason  {error}")],
+        );
+    }
     if config.directory {
         return run_directory(&config, &mut shutdown).await;
     }
@@ -53,6 +72,12 @@ async fn run_inner(config: Config) -> Result<()> {
     let listener = TcpListener::bind(config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
     let wraps = RustCryptoConstructionBWrap::new(keys.clone());
+    demo_log::event(
+        Kind::Security,
+        "X-Wing + ML-DSA-65",
+        "Post-quantum identity verified",
+        &[format!("local peer  {}", demo_log::peer(identity.peer_id))],
+    );
 
     if config.join_code.is_none() {
         // Migration runs before opening any replica handles, so every durable
@@ -100,11 +125,21 @@ async fn run_inner(config: Config) -> Result<()> {
                         .await?;
                 }
                 if Some(id) == new_id {
-                    eprintln!("qfsd: join code {}", vault.join_code());
+                    demo_log::event(
+                        Kind::Lifecycle,
+                        "LOCAL",
+                        format!("qfsd: join code {}", vault.join_code()),
+                        &[],
+                    );
                 }
                 vaults.insert(Rc::new(RefCell::new(vault)))?;
             }
-            eprintln!("qfsd: vault listening {local_addr}");
+            demo_log::event(
+                Kind::Lifecycle,
+                "TCP",
+                format!("qfsd: vault listening {local_addr}"),
+                &[format!("vaults  {}", vaults.vaults().len())],
+            );
             return run_vaults(listener, vaults, wraps, &mut shutdown).await;
         }
     }
@@ -113,7 +148,12 @@ async fn run_inner(config: Config) -> Result<()> {
         let directory_addr = config
             .directory_addr
             .ok_or(Error::InvalidInput("--join-code requires --directory-addr"))?;
-        eprintln!("qfsd: member listening {local_addr}");
+        demo_log::event(
+            Kind::Lifecycle,
+            "TCP",
+            format!("qfsd: member listening {local_addr}"),
+            &[],
+        );
         tokio::task::spawn_local(reject_inbound(listener));
         return run_member(
             keys,
@@ -136,9 +176,14 @@ async fn run_inner(config: Config) -> Result<()> {
     } else {
         None
     };
-    eprintln!(
-        "qfsd: identity verified; crypto ready; role {role:?}; listening {local_addr}; {} pending wraps",
-        keys.pending_wraps()?.len()
+    demo_log::event(
+        Kind::Lifecycle,
+        "TCP",
+        format!(
+            "qfsd: identity verified; crypto ready; role {role:?}; listening {local_addr}; {} pending wraps",
+            keys.pending_wraps()?.len()
+        ),
+        &[],
     );
     run_idle_member(listener, wraps, host, &mut shutdown).await
 }
@@ -149,12 +194,17 @@ async fn run_directory(config: &Config, shutdown: &mut Shutdown) -> Result<()> {
     let store = Rc::new(RefCell::new(DirectoryStore::open(
         &config.data_dir.join("directory.bin"),
     )?));
-    eprintln!("qfsd: directory listening {local_addr}");
+    demo_log::event(
+        Kind::Lifecycle,
+        "TCP",
+        format!("qfsd: directory listening {local_addr}"),
+        &["stores signed routing advertisements only".to_owned()],
+    );
     tokio::select! {
         result = serve_directory(listener, store) => result?,
         result = shutdown.wait() => result?,
     }
-    eprintln!("qfsd: shutdown complete");
+    demo_log::event(Kind::Lifecycle, "LOCAL", "qfsd: shutdown complete", &[]);
     Ok(())
 }
 
@@ -173,12 +223,19 @@ async fn run_vaults(
             _ = tokio::time::sleep(Duration::from_secs(ROTATION_INTERVAL_SECS)) => {
                 let count = wraps.rotate_all()?;
                 vaults.refresh_mailboxes()?;
-                eprintln!("qfsd: prepared {count} rotated pair wraps");
+                if count != 0 {
+                    demo_log::event(
+                        Kind::Security,
+                        "X-Wing",
+                        format!("qfsd: prepared {count} rotated pair wraps"),
+                        &["fresh pair epochs staged for authenticated peers".to_owned()],
+                    );
+                }
             }
         }
     }
     vaults.stop();
-    eprintln!("qfsd: shutdown complete");
+    demo_log::event(Kind::Lifecycle, "LOCAL", "qfsd: shutdown complete", &[]);
     Ok(())
 }
 
@@ -213,25 +270,40 @@ async fn run_member(
             result = attempt => match result {
                 Ok(joined) => joined,
                 Err(error) => {
-                    eprintln!("qfsd: join retry: {error}");
+                    demo_log::event(
+                        Kind::Warning,
+                        "TCP",
+                        "qfsd: join retry scheduled",
+                        &[format!("reason  {error}")],
+                    );
                     wait_retry().await;
                     continue;
                 }
             }
         };
         replica = Some(Rc::clone(&joined.replica));
-        eprintln!("qfsd: joined vault");
+        demo_log::event(
+            Kind::Membership,
+            "X-Wing + ML-DSA-65",
+            "qfsd: joined vault",
+            &[format!("host  {}", demo_log::peer(joined.peer_id()))],
+        );
         tokio::select! {
             result = shutdown.wait() => { result?; break; }
             result = joined.run() => {
                 if let Err(error) = result {
-                    eprintln!("qfsd: host disconnected; retrying: {error}");
+                    demo_log::event(
+                        Kind::Warning,
+                        "TCP",
+                        "Host disconnected; reconnecting",
+                        &[format!("reason  {error}")],
+                    );
                 }
             }
         }
         wait_retry().await;
     }
-    eprintln!("qfsd: shutdown complete");
+    demo_log::event(Kind::Lifecycle, "LOCAL", "qfsd: shutdown complete", &[]);
     Ok(())
 }
 
@@ -254,14 +326,21 @@ async fn run_idle_member(
             _ = tokio::time::sleep(Duration::from_secs(ROTATION_INTERVAL_SECS)) => {
                 let count = wraps.rotate_all()?;
                 if let Some(service) = &mut host { service.refresh_mailboxes()?; }
-                eprintln!("qfsd: prepared {count} rotated pair wraps");
+                if count != 0 {
+                    demo_log::event(
+                        Kind::Security,
+                        "X-Wing",
+                        format!("qfsd: prepared {count} rotated pair wraps"),
+                        &["fresh pair epochs staged for authenticated peers".to_owned()],
+                    );
+                }
             }
         }
     }
     if let Some(service) = &mut host {
         service.stop();
     }
-    eprintln!("qfsd: shutdown complete");
+    demo_log::event(Kind::Lifecycle, "LOCAL", "qfsd: shutdown complete", &[]);
     Ok(())
 }
 

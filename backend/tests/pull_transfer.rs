@@ -11,7 +11,7 @@ use quantam_fs::{
         sign::{PureMlDsa, RustCryptoPureMlDsa, MANIFEST_CONTEXT},
         wrap::{ConstructionBWrap, RustCryptoConstructionBWrap},
     },
-    encoding,
+    demo_log, encoding,
     ids::{Epoch, FileId},
     keystore::KeyStore,
     protocol::{manifest::Manifest, pull::PullRequest},
@@ -21,6 +21,110 @@ use quantam_fs::{
         pull::{encrypt_at_send, InProcessPullCoordinator},
     },
 };
+
+#[test]
+fn demo_log_groups_two_real_holders_and_never_completes_a_partial_pull() -> quantam_fs::Result<()> {
+    let directory = TestDir::new()?;
+    let host_keys = directory.keys("host")?;
+    let requester_keys = directory.keys("requester")?;
+    let first_holder_keys = directory.keys("first-holder")?;
+    let second_holder_keys = directory.keys("second-holder")?;
+    connect(&host_keys, &requester_keys)?;
+    connect(&first_holder_keys, &requester_keys)?;
+    connect(&second_holder_keys, &requester_keys)?;
+
+    let host_id = host_keys.peer_id()?;
+    let requester_id = requester_keys.peer_id()?;
+    let members = BTreeSet::from([host_id, requester_id]);
+    let file_id = FileId([0x91; 32]);
+    let first_body = b"piece supplied by holder one".to_vec();
+    let second_body = b"piece supplied by holder two".to_vec();
+    let host_chunks = shared_chunk_store();
+    let (first_id, second_id) = {
+        let mut chunks = host_chunks.lock().unwrap();
+        (
+            chunks.put(&file_id, 0, first_body.clone())?,
+            chunks.put(&file_id, 1, second_body.clone())?,
+        )
+    };
+    let first_chunks = shared_chunk_store();
+    first_chunks
+        .lock()
+        .unwrap()
+        .put(&file_id, 0, first_body.clone())?;
+    let second_chunks = shared_chunk_store();
+    second_chunks
+        .lock()
+        .unwrap()
+        .put(&file_id, 1, second_body.clone())?;
+
+    let mut host = HostService::new(host_keys.clone(), members.clone(), host_chunks)?;
+    host.heartbeat(requester_id, Duration::from_secs(60))?;
+    host.commit(signed_manifest(
+        &host_keys,
+        file_id,
+        vec![first_id, second_id],
+        (first_body.len() + second_body.len()) as u64,
+    )?)?;
+    host.link_file(host_id, "/two-source-file", file_id)?;
+    let requester_chunks = shared_chunk_store();
+    let mut requester = MemberReplica::new(
+        requester_keys.clone(),
+        host_id,
+        members,
+        requester_chunks.clone(),
+    )?;
+    for control in host.take_online_control(requester_id)? {
+        requester.apply_control(&control)?;
+    }
+    let trusted = requester
+        .trusted_manifest(&file_id)
+        .expect("host installed trusted manifest")
+        .clone();
+
+    let log_path = directory.0.join("demo-events.log");
+    demo_log::start("pull transfer integration test");
+    demo_log::set_log_file(&log_path)?;
+    let pull = InProcessPullCoordinator::new(requester_keys, requester_chunks);
+    let first_holder = InProcessPullCoordinator::new(first_holder_keys.clone(), first_chunks);
+    let second_holder = InProcessPullCoordinator::new(second_holder_keys.clone(), second_chunks);
+
+    let first_request = PullRequest::new(vec![first_id])?;
+    let first_responses = first_holder.serve(&first_request, requester_id)?;
+    assert_eq!(pull.accept(&first_responses, &trusted)?, 1);
+    demo_log::flush();
+    let partial_log = fs::read_to_string(&log_path)?;
+    assert!(partial_log.contains("File transfer in progress"));
+    assert!(partial_log.contains("1 / 2 pieces local"));
+    assert!(!partial_log.contains("File ready locally"));
+
+    // A fresh authenticated transmission of an already persisted piece is
+    // idempotent and must not become another source contribution.
+    let duplicate = first_holder.serve(&first_request, requester_id)?;
+    assert_eq!(pull.accept(&duplicate, &trusted)?, 0);
+    let second_responses =
+        second_holder.serve(&PullRequest::new(vec![second_id])?, requester_id)?;
+    assert_eq!(pull.accept(&second_responses, &trusted)?, 1);
+    demo_log::flush();
+
+    let complete_log = fs::read_to_string(&log_path)?;
+    assert_eq!(complete_log.matches("File ready locally").count(), 1);
+    let complete = complete_log
+        .split("File ready locally")
+        .nth(1)
+        .expect("complete transfer block");
+    assert!(complete.contains("2 / 2 pieces local | 2 contributing peers"));
+    assert!(complete.contains(&format!(
+        "{} -> 1 verified pieces",
+        demo_log::peer(first_holder_keys.peer_id()?)
+    )));
+    assert!(complete.contains(&format!(
+        "{} -> 1 verified pieces",
+        demo_log::peer(second_holder_keys.peer_id()?)
+    )));
+    assert_eq!(complete.matches("verified pieces").count(), 2);
+    Ok(())
+}
 
 static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 

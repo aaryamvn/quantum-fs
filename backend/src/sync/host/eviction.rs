@@ -1,5 +1,9 @@
 use super::{HostService, MemberReplica, QueueContent};
-use crate::{ids::FileId, Error, Result};
+use crate::{
+    demo_log::{self, Kind},
+    ids::FileId,
+    Error, Result,
+};
 
 impl HostService {
     pub fn evict_file(&mut self, _file_id: FileId) -> Result<usize> {
@@ -41,6 +45,18 @@ impl MemberReplica {
             .ok_or(Error::State("replica metadata is unavailable"))?;
         staged.persist_metadata(staged_metadata)?;
         *store = staged;
+        demo_log::event(
+            Kind::File,
+            "LOCAL",
+            format!("cache copy evicted  {}", demo_log::file(file_id)),
+            &[
+                format!("{removed} plaintext chunk(s) removed"),
+                format!(
+                    "manifest retained · restorable from host {}",
+                    demo_log::peer(self.host_id)
+                ),
+            ],
+        );
         Ok(removed)
     }
 }
