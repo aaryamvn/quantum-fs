@@ -320,11 +320,29 @@ void main() {
   // ~18 px left of the panel edge at 1280 wide (558–575 px at u_panel = 0.45).
   float drift = max(0.0075 + 0.40 * breathe, 0.0);
   float uTarget = (uv.x + drift) / u_panel;
-  // Idle: the colour boundary undulates down the panel on a ~35 s period. 0.004
-  // of ramp is 0.0018 uv — under 2.5 px at 1280 — which on top of the drift's
-  // own 0.013 uv keeps the black point inside a 10 px band. Anything larger and
-  // the edge visibly swims; the travelling band below is what carries the life.
-  uTarget += amb * 0.004 * sin(uv.y * 2.4 + u_idle * 0.18 + 1.3);
+  // Idle: the colour boundary undulates down the panel on a ~18 s period, and
+  // the standing wave itself leans and slides on a much slower ~57 s drift — so
+  // the edge breathes and tilts instead of ticking through one fixed shape.
+  //
+  // Offset strictly negative for the same reason the drift above is strictly
+  // positive: lowering uTarget moves the black point *right*, so the wave can
+  // only ever push the boundary outward, and at 0.009 of ramp (2.3× the old
+  // amplitude) a wave centred on zero would otherwise walk the edge past the
+  // 530 px floor the settled gradient is held to. Range ≈ 0.5 … 11 px right of
+  // where the drift alone puts it: measured over 3 s … 75 s of idle the black
+  // point stays inside 534–553 px at 1280 wide.
+  float lean = uv.y * (2.4 + 0.55 * sin(u_idle * 0.11 + 0.4));
+  uTarget -= amb * 0.009
+           * (1.1 - sin(lean + u_idle * 0.35 + 0.8 * sin(u_idle * 0.09) + 1.3));
+  // Hue shimmer. Weighted onto the magenta→violet transition (~0.36 of the
+  // panel) by a Gaussian that is ≈ 0 at both endpoints, so the steepest part of
+  // the ramp shimmers while the coral anchor and the black point do not move:
+  // 0.02 of ramp there is 0.009 uv, and under 0.0005 out at the black point.
+  float mid = exp(-pow((uv.x / u_panel - 0.36) * 3.4, 2.0));
+  uTarget += amb * mid * (
+      0.013 * sin(uv.y * 1.70 - u_idle * 0.95 + 0.6)
+    + 0.007 * sin(uv.y * 3.10 + u_idle * 1.60 + 2.4)
+  );
   uTarget = clamp(uTarget, 0.0, 1.0);
 
   // The panel resolves before the open field does, and the cross-fade starts
@@ -369,14 +387,34 @@ void main() {
   float mottle = valueNoise(q * 17.0 + vec2(t * 0.05, -t * 0.04)) - 0.5;
   col *= 1.0 + 0.085 * mottle * (1.0 - fade);
 
-  // Idle: one very slow band of light travelling out along the panel, ~30 s per
-  // pass. It scales the colour *above* BLACK, never the frame — so it can only
-  // ever dim what is already lit and can never lift the dark side above the page
-  // background, and the 3.5% it moves is felt rather than seen. It is windowed
-  // off the first tenth of the panel because that is the coral anchor: #FF7B7B
-  // is a brand endpoint and has to measure the same at t = 3 s and t = 25 s.
+  // Idle: three bands of light travelling along the panel, and they disagree —
+  // 12% outward at ~12 s per pass, 4% back the other way at ~33 s, and 4.5%
+  // outward at ~7.9 s, each on its own spatial frequency and its own vertical
+  // lean. The two slow ones are the pass you watch cross the panel; the third
+  // is what makes the motion legible second to second rather than only over a
+  // whole pass — with a single ~12 s band the field changes by well under one
+  // level from one second to the next, which is why the old 3.5% band read as
+  // still. The periods are incommensurate, so the field never repeats a frame.
+  //
+  // Every band scales the colour *above* BLACK, never the frame — so it can
+  // only ever dim or lift what is already lit and can never raise the dark side
+  // above the page background.
+  //
+  // Two windows. The near one keeps the bands off the first tenth of the panel
+  // because that is the coral anchor: #FF7B7B is a brand endpoint and has to
+  // measure the same at t = 3 s and t = 75 s. The far one fades them out across
+  // the last third, where the violet→black tail is only a few levels above
+  // BLACK: the bands move nothing the eye can see there, but those few levels
+  // are enough to wobble the measured edge of the gradient, and the boundary
+  // undulation above is what is supposed to move that edge.
+  float bx = (uv.x / u_panel) * 6.2832;
   float band = smoothstep(0.0, 0.10, uv.x)
-             * amb * 0.035 * sin((uv.x / u_panel) * 6.2832 - u_idle * 0.21 + uv.y * 0.8);
+             * (1.0 - smoothstep(u_panel * 0.68, u_panel * 0.96, uv.x))
+             * amb * (
+      0.119 * sin(bx - u_idle * 0.52 + uv.y * 0.8)
+    + 0.040 * sin(bx * 0.55 + u_idle * 0.19 - uv.y * 1.4 + 2.1)
+    + 0.045 * sin(bx * 1.70 - u_idle * 0.80 + uv.y * 2.2 + 0.7)
+  );
   col += max(col - BLACK, vec3(0.0)) * band;
 
   float dither = (hash21(gl_FragCoord.xy + u_time) - 0.5) * (2.0 / 255.0);
